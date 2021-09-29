@@ -24,6 +24,10 @@ class gamemodes(enum.Enum):
     WALLS = "walls"
     WALLS3 = "walls3"
 
+class scope(enum.Enum):
+    GLOBAL = "global"
+    GUILD = "guild"
+    USER = "user"
 
 
 

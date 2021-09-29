@@ -4,18 +4,22 @@ import pathlib
 
 from abc import ABC, abstractmethod
 from PIL import Image
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple, Union, List, Any
 
 from redbot.core import commands, Config
 from redbot.core.bot import Red
 
 from .enums import gamemodes
 
+
 class MixinMeta(ABC):
     bot: Red
     config: Config
     ctx: commands.Context
     session: aiohttp.ClientSession
+
+    all_modules: list
+    autostats_tasks: dict
 
     """Api requests"""
     @abstractmethod
@@ -29,11 +33,55 @@ class MixinMeta(ABC):
 
     """Commands"""
     @abstractmethod
+    async def command_autostats(self, ctx: commands.Context, gamemode: gamemodes, *usernames: str) -> None:
+        raise NotImplementedError()
+
+    @abstractmethod
+    async def command_autostats_stop(self, ctx: commands.Context) -> None:
+        raise NotImplementedError()
+
+    @abstractmethod
+    async def command_autostats_stop_all(self, ctx: commands.Context, scope_global: bool = True) -> None:
+        raise NotImplementedError()
+
+    @abstractmethod
+    async def command_gamemodes(self, ctx: commands.Context) -> None:
+        raise NotImplementedError()
+
+    @abstractmethod
     async def command_hypixelset(self, ctx: commands.Context) -> None:
         raise NotImplementedError()
 
     @abstractmethod
     async def command_hypixelset_apikey(self, ctx: commands.Context, apikey: str, guild: discord.Guild = None) -> None:
+        raise NotImplementedError()
+
+    @abstractmethod
+    async def command_hypixelset_color(self, ctx: commands.Context, color: str) -> None:
+        raise NotImplementedError()
+
+    @abstractmethod
+    async def command_hypixelset_modules(self, ctx: commands.Context) -> None:
+        raise NotImplementedError()
+
+    @abstractmethod
+    async def command_hypixelset_modules_add(self, ctx: commands.Context, gamemode: gamemodes, db_key: str, clear_name: str) -> None:
+        raise NotImplementedError()
+
+    @abstractmethod
+    async def command_hypixelset_modules_remove(self, ctx: commands.Context, gamemode: gamemodes, db_key: str = None, clear_name: str = None) -> None:
+        raise NotImplementedError()
+
+    @abstractmethod
+    async def command_hypixelset_modules_reorder(self, ctx: commands.Context, gamemode: gamemodes) -> None:
+        raise NotImplementedError()
+
+    @abstractmethod
+    async def command_hypixelset_modules_list(self, ctx: commands.Context, gamemode: gamemodes) -> None:
+        raise NotImplementedError()
+
+    @abstractmethod
+    async def command_hypixelset_username(self, ctx: commands.Context, username: str) -> None:
         raise NotImplementedError()
 
     @abstractmethod
@@ -63,11 +111,15 @@ class MixinMeta(ABC):
 
     """Image gen"""
     @abstractmethod
-    async def create_stats_img(self, user_data: dict) -> Image.Image:
+    async def create_stats_img(self, user_data: dict, gamemode: gamemodes, compare_stats: list = None) -> Image.Image:
         raise NotImplementedError()
 
     @abstractmethod
     def fetch_font(self, path: pathlib.Path, query: str) -> pathlib.Path:
+        raise NotImplementedError()
+
+    @abstractmethod
+    def get_compare_value_and_color(self, module: Tuple, original_value: Union[Any]) -> Tuple[Union[Any], Tuple]:
         raise NotImplementedError()
 
     @abstractmethod
@@ -93,7 +145,11 @@ class MixinMeta(ABC):
         raise NotImplementedError()
 
     @abstractmethod
-    async def maybe_send_image(self, channel: discord.TextChannel, im: Image.Image) -> discord.Message:
+    async def fetch_modules(self) -> None:
+        raise NotImplementedError()
+
+    @abstractmethod
+    async def maybe_send_images(self, channel: discord.TextChannel, im: List[Image.Image]) -> discord.Message:
         raise NotImplementedError()
 
     @abstractmethod
@@ -103,6 +159,7 @@ class MixinMeta(ABC):
     @abstractmethod
     def xp_key_for_gamemode(self, gamemode: gamemodes) -> Optional[str]:
         raise NotImplementedError()
+
 
 class CompositeMetaClass(type(commands.Cog), type(ABC)):
     """
