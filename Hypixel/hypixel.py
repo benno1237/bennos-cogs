@@ -1,16 +1,14 @@
 import aiohttp
 import asyncio
-import base64
 import copy
 import discord
-import io
 import json
 import MinePI
 import pathlib
 import random
 
 from io import BytesIO
-from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageColor
 from typing import Optional, Tuple, Final, Union, List, Any
 
 from redbot.core import commands, Config
@@ -19,7 +17,7 @@ from redbot.core.data_manager import cog_data_path, bundled_data_path
 from redbot.core.utils.chat_formatting import box
 
 from .utils.abc import CompositeMetaClass, MixinMeta
-from .utils.enums import gamemodes, scope
+from .utils.enums import gamemodes, scope, colortypes
 
 INVALID_API_KEY: Final = "Invalid API key"
 USER_AGENT: Final = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/93.0.4577.82 Safari/537.36"
@@ -344,9 +342,18 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
             await ctx.send("This apikey doesn't seem to be valid!")
 
     @command_hypixelset.command(name="color", aliases=["colour"])
-    async def command_hypixelset_color(self, ctx: commands.Context, color: str) -> None:
+    async def command_hypixelset_color(self, ctx: commands.Context, color: str, type: colortypes = None) -> None:
         """Custom header color"""
-        pass
+        try:
+            if type:
+                color = ImageColor.getrgb(f"{type.value}{color}")
+            else:
+                color = ImageColor.getrgb(color)
+        except ValueError:
+            await ctx.send("Color couldn't be found")
+            return
+
+        await self.config.user(ctx.author).header_color.set(list(color))
 
     @commands.guild_only()
     @commands.guildowner_or_permissions(administrator=True, manage_guild=True)

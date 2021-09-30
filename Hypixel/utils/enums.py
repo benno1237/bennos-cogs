@@ -29,5 +29,11 @@ class scope(enum.Enum):
     GUILD = "guild"
     USER = "user"
 
+class colortypes(enum.Enum):
+    HSB = "hsb"
+    HSL = "hsl"
+    HSV = "hsv"
+    RGB = "rgb"
+
 
 
