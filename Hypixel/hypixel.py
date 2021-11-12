@@ -22,8 +22,166 @@ from .utils.enums import gamemodes, scope, colortypes
 INVALID_API_KEY: Final = "Invalid API key"
 USER_AGENT: Final = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/93.0.4577.82 Safari/537.36"
 
+"""Api requests"""
+async def request_hypixel(
+        session: aiohttp.ClientSession,
+        apikey: str,
+        ctx: commands.Context = None,
+        uuid: str = None,
+        topic: str = "player",
+) -> Tuple[Optional[dict], Optional[int]]:
+    url = f"https://api.hypixel.net/{topic}"
 
-class Autostats():
+    if uuid:
+        url += f"?uuid={uuid}"
+
+    headers = {
+        "API-Key": apikey,
+        "User-Agent": USER_AGENT
+    }
+
+    async with session.get(url=url, headers=headers) as resp:
+        try:
+            resp_dict = json.loads(await resp.text())
+
+            if topic == "player":
+                for key, value in copy.copy(resp_dict["player"]["stats"]).items():
+                    resp_dict["player"]["stats"][key.lower()] = value
+
+            return resp_dict, resp.status
+        except json.JSONDecodeError:
+            # invalid response?
+            print(resp.status)
+            return None, resp.status
+        except AttributeError:
+            # api down again?
+            return None, resp.status
+        except asyncio.TimeoutError:
+            # api down again?
+            return None, None
+
+
+async def request_mojang(
+        mc_name: str,
+        session: aiohttp.ClientSession,
+) -> Tuple[Optional[dict], Optional[int]]:
+    url = f"https://api.mojang.com/users/profiles/minecraft/{mc_name}"
+
+    headers = {
+        "User-Agent": USER_AGENT
+    }
+    async with session.get(url=url, headers=headers) as resp:
+        try:
+            resp_dict = json.loads(await resp.text())
+            return resp_dict, resp.status
+        except json.JSONDecodeError:
+            # invalid response?
+            return None, resp.status
+        except asyncio.TimeoutError:
+            # api down again?
+            return None, None
+
+
+class Player:
+    def __init__(
+            self,
+            ctx: commands.Context,
+            user_identifier: Union[str, discord.Member],
+            config: Config,
+            session: aiohttp.ClientSession,
+    ):
+        self._session = session
+        self._ctx = ctx
+        self._user_identifier = user_identifier
+        self._config: Config = config
+
+        self._guild = ctx.guild
+        self._uuid: Optional[str] = None
+        self._user: Optional[discord.Member] = None
+        self._skin: Optional[Image.Image] = None
+        self._xp: Optional[int] = None
+        self._stats: Optional[dict] = None
+
+        self._apikey: Optional[str] = None
+        self._apikey_scope: Optional[scope] = None
+
+    @property
+    def rank(self):
+        """Returns the player's Hypixel rank"""
+        return None
+
+    @property
+    def skin(self):
+        """Returns the player's raw skin"""
+        return self._skin
+
+    @property
+    def uuid(self):
+        """Returns the UUID associated to this object"""
+        return self._uuid
+
+    @property
+    def valid(self):
+        """Returns True if there is a UUID associated to this object"""
+        return not not self._uuid
+
+    def xp(self, gamemode: gamemodes):
+        """Returns the player's network XP for the given gamemode"""
+        return
+
+    def stats(self, gamemode: gamemodes):
+        """Returns the player's stats for the given gamemode"""
+        return self._stats[gamemode.value]
+
+    async def get_uuid(self):
+        if isinstance(self._user_identifier, discord.Member) or len(self._user_identifier) == 18:
+            try:
+                member_obj = await commands.MemberConverter().convert(self._ctx, str(self._user_identifier))
+                uuid = await self._config.user(member_obj).uuid()
+                if uuid:
+                    self._user = member_obj
+                    self._uuid = uuid
+                    return
+
+            except commands.BadArgument:
+                pass
+
+        # no MemberObject or ID was passed or the given user has no uuid set
+        # trying a request to mojang servers
+        resp, status = await request_mojang(self._user_identifier, self._session)
+
+        if status == 200 and resp.get("id", None):
+            # request successful, using the uuid returned
+            self._uuid = resp["id"]
+        else:
+            # request not successful, trying to convert the rest
+            try:
+                member_obj = await commands.MemberConverter().convert(self._ctx, str(self._user_identifier))
+
+                uuid = await self._config.user(member_obj).uuid()
+                if uuid:
+                    self._user = member_obj
+                    self._uuid = uuid
+                    return
+
+            except commands.BadArgument:
+                pass
+
+    async def fetch_stats(self):
+        if not self._uuid:
+            return
+
+        resp, status = await request_hypixel(
+            session=self._session,
+            apikey=self._apikey,
+            uuid=self._uuid,
+        )
+
+        if status == 200 and resp and resp["success"]:
+            self._stats = resp["player"]
+
+
+class Autostats:
     def __init__(self,
                  cog,
                  channel: discord.TextChannel,
@@ -53,7 +211,7 @@ class Autostats():
             apikey=self.apikey
         )
 
-        if stats != self.user_data[0]["stats"]:
+        if stats and stats != self.user_data[0]["stats"]:
             self.user_data[0]["stats"] = stats
             self.user_data[0]["xp"] = xp
             return True
@@ -61,34 +219,37 @@ class Autostats():
             return False
 
     async def main(self):
-        while not self.task.cancelled():
-            previous = self.user_data[0]["stats"]
-            if await self.is_updated():
-                await self.maybe_delete_old_messages()
-                im_list = []
+        try:
+            while not self.task.cancelled():
+                previous = self.user_data[0]["stats"]
+                if await self.is_updated():
+                    await self.maybe_delete_old_messages()
+                    im_list = []
 
-                for idx, user in enumerate(self.user_data):
-                    if idx:
-                        previous = self.user_data[idx]["stats"]
-                        stats, xp, _ = await self.cog.uuid_to_stats(
-                            uuid=user["uuid"],
+                    for idx, user in enumerate(self.user_data):
+                        if idx:
+                            previous = self.user_data[idx]["stats"]
+                            stats, xp, _ = await self.cog.uuid_to_stats(
+                                uuid=user["uuid"],
+                                gamemode=self.gamemode,
+                                active_modules=self.current_modules,
+                                custom_modules=self.custom_modules,
+                                apikey=self.apikey
+                            )
+
+                            self.user_data[idx]["stats"] = stats
+                            self.user_data[idx]["xp"] = xp
+
+                        im_list.append(await self.cog.create_stats_img(
+                            user_data=user,
                             gamemode=self.gamemode,
-                            active_modules=self.current_modules,
-                            custom_modules=self.custom_modules,
-                            apikey=self.apikey
-                        )
+                            compare_stats=previous
+                        ))
 
-                        self.user_data[idx]["stats"] = stats
-                        self.user_data[idx]["xp"] = xp
-
-                    im_list.append(await self.cog.create_stats_img(
-                        user_data=user,
-                        gamemode=self.gamemode,
-                        compare_stats=previous
-                    ))
-
-                self.messages = await self.cog.maybe_send_images(self.channel, im_list)
-            await asyncio.sleep(10)
+                    self.messages = await self.cog.maybe_send_images(self.channel, im_list)
+                await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            pass
 
     async def maybe_delete_old_messages(self):
         try:
@@ -97,6 +258,10 @@ class Autostats():
         except (discord.Forbidden, discord.NotFound):
             pass
 
+    def _exception_catching_callback(self, task: asyncio.Task):
+        if task.exception():
+            task.result()
+
     async def start(self):
         im_list = []
         for user in self.user_data:
@@ -104,7 +269,9 @@ class Autostats():
 
         self.messages = await self.cog.maybe_send_images(self.channel, im_list)
 
-        self.task = asyncio.create_task(self.main())
+        if self.user_data:
+            self.task = asyncio.create_task(self.main())
+            self.task.add_done_callback(self._exception_catching_callback)
 
     async def cancel(self):
         await self.maybe_delete_old_messages()
@@ -143,7 +310,11 @@ class SelectionRow(discord.ui.Select):
             await self.config.guild(interaction.guild).set_raw(self.gamemode.value, "current_modules", value=new_modules)
             await interaction.response.send_message("Order changed.")
             self.view.stop()
-
+        else:
+            await interaction.response.send_message(
+                "Only the author of the original message can interact with this component.",
+                ephemeral=True
+            )
 
 class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
     def __init__(self, bot):
@@ -205,58 +376,6 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
         asyncio.create_task(self.fetch_modules())
 
 
-    """Api requests"""
-    async def request_hypixel(self, ctx: commands.Context = None, uuid: str = None, topic: str = "player", apikey: str = None) -> Tuple[Optional[dict], Optional[int]]:
-        if not apikey:
-            apikey, _ = await self.fetch_apikey(ctx)
-
-        url = f"https://api.hypixel.net/{topic}"
-
-        if uuid:
-            url += f"?uuid={uuid}"
-
-        headers = {
-            "API-Key": apikey,
-            "User-Agent": USER_AGENT
-        }
-
-        async with self.session.get(url=url, headers=headers) as resp:
-            try:
-                resp_dict = json.loads(await resp.text())
-
-                if topic == "player":
-                    for key, value in copy.copy(resp_dict["player"]["stats"]).items():
-                        resp_dict["player"]["stats"][key.lower()] = value
-
-                return resp_dict, resp.status
-            except json.JSONDecodeError:
-                #invalid response?
-                return None, resp.status
-            except AttributeError:
-                #api down again?
-                return None, resp.status
-            except asyncio.TimeoutError:
-                #api down again?
-                return None, None
-
-    async def request_mojang(self, mc_name: str) -> Tuple[Optional[dict], Optional[int]]:
-        url = f"https://api.mojang.com/users/profiles/minecraft/{mc_name}"
-
-        headers = {
-            "User-Agent": USER_AGENT
-        }
-        async with self.session.get(url=url, headers=headers) as resp:
-            try:
-                resp_dict = json.loads(await resp.text())
-                return resp_dict, resp.status
-            except json.JSONDecodeError:
-                # invalid response?
-                return None, resp.status
-            except asyncio.TimeoutError:
-                #api down again?
-                return None, None
-
-
     """Commands"""
     @commands.guild_only()
     @commands.group(name="autostats", invoke_without_command=True)
@@ -268,6 +387,12 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
         custom_modules = await self.config.guild(ctx.guild).get_raw(gamemode.value, "custom_modules")
         apikey, key_scope = await self.fetch_apikey(ctx)
 
+        if key_scope == scope.GUILD:
+            if len(self.autostats_tasks[key_scope.value]) >= 5:
+                await ctx.send("Already 5 autostats tasks running on the guild apikey. "
+                               f"Set your own apikey using `{ctx.clean_prefix}hypixelset apikey`")
+                return
+
         autostats_task = Autostats(
             self,
             ctx.channel,
@@ -277,12 +402,6 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
             current_modules,
             custom_modules
         )
-
-        if key_scope == scope.GUILD:
-            if len(self.autostats_tasks[key_scope.value]) >= 5:
-                await ctx.send("Already 5 autostats tasks running on the guild apikey. "
-                               f"Set your own apikey using `{ctx.clean_prefix}hypixelset apikey`")
-                return
 
         self.autostats_tasks[key_scope.value][ctx.author.id] = autostats_task
         await autostats_task.start()
@@ -314,11 +433,6 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
     @commands.command(name="gamemodes")
     async def command_gamemodes(self, ctx) -> None:
         """Lists all available gamemodes"""
-        embed = discord.Embed(
-            description=" \n".join([gamemode.value for gamemode in gamemodes]),
-            color=await ctx.embed_colour()
-        )
-
         await ctx.maybe_send_embed("\n".join([gamemode.value for gamemode in gamemodes]))
 
     @commands.group(name="hypixelset")
@@ -328,9 +442,9 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
     @commands.dm_only()
     @command_hypixelset.command(name="apikey")
     async def command_hypixelset_apikey(self, ctx: commands.Context, apikey: str, guild: discord.Guild = None) -> None:
-        resp, status = await self.request_hypixel(ctx=ctx, topic="key", apikey=apikey)
+        resp, status = await request_hypixel(ctx=ctx, topic="key", apikey=apikey, session=self.session)
 
-        if status == 200:
+        if status == 200 and resp:
             if not guild:
                 await self.config.user(ctx.author).apikey.set(apikey)
             else:
@@ -432,7 +546,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
     @commands.guild_only()
     @command_hypixelset.command(name="username", aliases=["name"])
     async def command_hypixelset_username(self, ctx: commands.Context, username: str) -> None:
-        resp, status = await self.request_mojang(username)
+        resp, status = await request_mojang(username, session=self.session)
         if status == 200 and resp.get("id", None):
             await self.config.user(ctx.author).uuid.set(resp["id"])
             await ctx.tick()
@@ -449,12 +563,61 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
 
             await self.maybe_send_images(ctx.channel, im_list)
 
+    @commands.command(name="tstats")
+    async def command_tstats(self, ctx):
+        active_modules = [
+            ("wins_bedwars", "Wins"),
+            ("kills_bedwars", "Kills"),
+            ("final_kills_bedwars", "Final Kills"),
+            ("beds_broken_bedwars", "Beds Broken"),
+            ("kills_per_game", "Kills/Game"),
+            ("losses_bedwars", "Losses"),
+            ("deaths_bedwars", "Deaths"),
+            ("final_deaths_bedwars", "Final Deaths"),
+            ("beds_lost_bedwars", "Beds Lost"),
+            ("final_kills_per_game", "Finals/Game"),
+            ("win_loose_rate", "WLR"),
+            ("kill_death_rate", "KDR"),
+            ("final_kill_death_rate", "FKDR"),
+            ("beds_destroyed_lost_rate", "BDLR"),
+            ("beds_per_game", "Beds/Game"),
+        ]
+        custom_modules = {
+            "kills_per_game": "round(gamemode_stats['kills_bedwars'] / gamemode_stats['games_played_bedwars'], 2)",
+            "final_kills_per_game": "round(gamemode_stats['final_kills_bedwars'] / gamemode_stats['games_played_bedwars'], 2)",
+            "win_loose_rate": "round(gamemode_stats['games_played_bedwars'] / gamemode_stats['wins_bedwars'], 2)",
+            "kill_death_rate": "round(gamemode_stats['kills_bedwars'] / gamemode_stats['deaths_bedwars'], 2)",
+            "final_kill_death_rate": "round(gamemode_stats['final_kills_bedwars'] / gamemode_stats['final_deaths_bedwars'], 2)",
+            "beds_destroyed_lost_rate": "round(gamemode_stats['beds_broken_bedwars'] / gamemode_stats['beds_lost_bedwars'], 2)",
+            "beds_per_game": "round(gamemode_stats['beds_broken_bedwars'] / gamemode_stats['games_played_bedwars'], 2)",
+        }
+
+        async with ctx.typing():
+            user_data = await self.username_list_to_data(
+                ctx,
+                gamemode=gamemodes.BEDWARS,
+                username_list=["sucr_kolli"],
+                active_modules=active_modules,
+                custom_modules=custom_modules,
+            )
+
+            await self.maybe_send_images(ctx.channel, [await self.create_stats_img_new(user_data[0], gamemodes.BEDWARS)])
+
     """Converters"""
-    async def username_list_to_data(self, ctx, gamemode: gamemodes, username_list: list) -> list:
+    async def username_list_to_data(
+            self,
+            ctx,
+            gamemode: gamemodes,
+            username_list: list,
+            active_modules: list = None,
+            custom_modules: dict = None,
+    ) -> list:
         if ctx.guild:
             guild_data = await self.config.guild(ctx.guild).all()
-            active_modules = await self.config.guild(ctx.guild).get_raw(gamemode.value, "current_modules")
-            custom_modules = await self.config.guild(ctx.guild).get_raw(gamemode.value, "custom_modules")
+            if not active_modules:
+                active_modules = await self.config.guild(ctx.guild).get_raw(gamemode.value, "current_modules")
+            if not custom_modules:
+                custom_modules = await self.config.guild(ctx.guild).get_raw(gamemode.value, "custom_modules")
         else:
             guild_data = None
             header_color = tuple(await self.config.header_color())
@@ -467,7 +630,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
         async for username in AsyncIter(username_list):
             #trying a direct request first
             if 16 >= len(username) >= 3:
-                uuid_resp, status = await self.request_mojang(username)
+                uuid_resp, status = await request_mojang(username, session=self.session)
                 if uuid_resp and status == 200:
                     try:
                         data, xp, username = await self.uuid_to_stats(uuid_resp["id"], gamemode, active_modules, custom_modules, ctx=ctx)
@@ -482,6 +645,8 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
                         })
                         continue
                     except ValueError:
+                        pass
+                    except KeyError:
                         pass
 
             #if it fails, try to convert the username to a discord.User object
@@ -524,9 +689,11 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
                             active_modules: list,
                             custom_modules: dict,
                             ctx: commands.Context = None,
-                            apikey: str = None) -> Optional[Tuple[List[Tuple[str, str]], Any, Any]]:
-        resp, status = await self.request_hypixel(ctx=ctx, uuid=uuid, apikey=apikey)
-        if status == 200:
+                            apikey: str = None) -> Optional[Tuple[List, Any, Any]]:
+        if not apikey:
+            apikey, _ = await self.fetch_apikey(ctx)
+        resp, status = await request_hypixel(ctx=ctx, uuid=uuid, apikey=apikey, session=self.session)
+        if status == 200 and resp:
             gamemode_data = resp["player"]["stats"][gamemode.value]
 
             stats = []
@@ -539,7 +706,8 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
 
             return stats, gamemode_data[self.xp_key_for_gamemode(gamemode)], resp["player"]["playername"]
 
-        return None
+        else:
+            return [], 0, ""
 
 
     """Dpy Events"""
@@ -556,7 +724,6 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
             await ctx.send("No personal or guild apikey set!")
             raise commands.CheckFailure()
 
-
     def cog_unload(self) -> None:
         asyncio.create_task(self.cog_unload_task())
 
@@ -569,6 +736,104 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
 
 
     """Image gen"""
+    async def create_stats_img_new(self, user_data: dict, gamemode: gamemodes):
+        datapath: pathlib.Path = cog_data_path(self)
+        background_path: pathlib.Path = datapath / "backgrounds"
+
+        background = random.choice([file for file in background_path.iterdir() if file.is_file()])
+        im_background = Image.open(background).convert("RGB")
+        im_background = ImageEnhance.Brightness(im_background).enhance(0.3)
+        im_background = im_background.filter(ImageFilter.GaussianBlur(im_background.width / 300))
+
+        font_path = self.fetch_font(datapath, "arial")
+
+        draw = ImageDraw.Draw(im_background, "RGBA")
+
+        # top box
+        font = ImageFont.truetype(str(font_path), size=40)
+        x_top = (im_background.width * 0.02, im_background.width * 0.98)
+        y_top = (im_background.height * 0.02, im_background.height * 0.22)
+
+        draw.rounded_rectangle([(x_top[0], y_top[0]), (x_top[1], y_top[1])], fill=(0, 0, 0, 120), radius=20)
+        draw.text(
+            (x_top[0], (y_top[1] / 2 - y_top[0])),
+            font=font,
+            text=user_data["username"],
+            anchor="lm",
+        )
+
+        # stats box
+        font = ImageFont.truetype(str(font_path), size=20)
+        x = (x_top[0], im_background.width * 0.7)
+        y = (im_background.height * 0.25, im_background.height * 0.92)
+        draw.rounded_rectangle([(x[0], y[0]), (x[1], y[1])], fill=(0, 0, 0, 120), radius=20)
+
+        colors = [(0, 200, 0, 255), (200, 0, 0, 255), (0, 0, 200, 255), (0, 200, 200, 255)]
+
+        start_x = (x[0] + im_background.width / 50)
+        spacing_x = (x[1] - x[0]) / 3
+        pos_x = start_x
+
+        start_y = y[0] + im_background.width / 100
+        spacing_y = (y[1] - y[0]) / int(len(user_data["stats"]) / 3)
+        pos_y = [start_y + spacing_y * x for x in range(int(len(user_data["stats"]) / 3))]
+
+        for idx, module in enumerate(user_data["stats"]):
+            if idx < (len(user_data["stats"]) / 3):
+                color = colors[0] if (idx + 1) % int(len(user_data["stats"]) / 3) else colors[3]
+            elif idx < (len(user_data["stats"]) / 3) * 2:
+                pos_x = start_x + spacing_x
+                color = colors[1] if (idx + 1) % int(len(user_data["stats"]) / 3) else colors[3]
+            elif idx >= (len(user_data["stats"]) / 3) * 2:
+                pos_x = start_x + spacing_x * 2
+                color = colors[2] if (idx + 1) % int(len(user_data["stats"]) / 3) else colors[3]
+
+            draw.text(
+                (pos_x, pos_y[idx % int(len(user_data["stats"]) / 3)]),
+                text=f"{module[1]}",
+                font=font,
+                anchor="lt",
+                fill=color,
+            )
+            draw.text(
+                (pos_x + font.getlength(module[1] + " "), pos_y[idx % int(len(user_data["stats"]) / 3)]),
+                text=f"{module[0]}",
+                font=font,
+                anchor="lt",
+            )
+
+        # skin box
+        x_skin = (im_background.width * 0.72, x_top[1])
+        draw.rounded_rectangle([(x_skin[0], y[0]), (x_skin[1], y[1])], fill=(0, 0, 0, 120), radius=20)
+
+        pos = random.choice([
+            (-25, -25, 20, 5, -2, -20, 2),
+            (-25, 25, 20, 5, -2, 20, -2),
+            (-5, 25, 10, 5, -2, 5, -5),
+            (-5, -25, 10, 5, -2, -5, 5),
+            (0, 0, 0, 0, 0, 0, 0),
+        ])
+        im_skin = await MinePI.render_3d_skin(
+            user_data["uuid"],
+            *pos,
+            12,
+            True,
+            True,
+            False,
+            skin_image=user_data["skin"]
+        )
+
+        height = y[1] - y[0] - im_background.height / 25
+        width = im_skin.width * (height / im_skin.height)
+        im_skin = im_skin.resize((int(width), int(height)))
+        im_background = im_background.convert("RGBA")
+
+        x_pos_skin = int((x_skin[0] + (x_skin[1] - x_skin[0]) / 2) - im_skin.width / 2)
+        y_pos_skin = int((y[0] + (y[1] - y[0]) / 2) - im_skin.height / 2)
+        im_background.alpha_composite(im_skin, (x_pos_skin, y_pos_skin))
+
+        return im_background
+
     async def create_stats_img(self, user_data: dict, gamemode: gamemodes, compare_stats: list = None) -> Image.Image:
         datapath: pathlib.Path = cog_data_path(self)
         background_path: pathlib.Path = datapath / "backgrounds"
@@ -576,7 +841,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
         color_header_stats = (255, 145, 0)
         color_body_stats = (255, 200, 0)
 
-        #take care of the background image
+        # take care of the background image
         def background_im():
             background = random.choice([file for file in background_path.iterdir() if file.is_file()])
             im_background = Image.open(background).convert("RGBA")
@@ -607,7 +872,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
         )
 
         def generate_image(im_skin):
-            #fetch available fonts
+            # fetch available fonts
             font_header_player_path = self.fetch_font(datapath, "header_player")
             font_header_stats_path = self.fetch_font(datapath, "header_stats")
             font_body_stats_path = self.fetch_font(datapath, "body_stats")
@@ -671,6 +936,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
             anchor = "lm"
             compare_anchor = "rm"
             x = int(im_background.width / 25)
+            compare_x = stats_box[0]
             header_margin = int(font_header_player.size + im_background.height / 100)
             for i in range(0, len(user_data["stats"])):
                 try:
@@ -681,6 +947,10 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
                 if i == modules_left:
                     anchor = "rm"
                     compare_anchor = "lm"
+                    # compare_x = (im_background.width - stats_box[0]) + x + im_skin.width / 2
+                    compare_x = stats_box[0] + im_skin.width * 1.5 + x
+                    # print(stats_box[0], im_background.width, im_skin.width, x, compare_x)
+                    # print(im_background.width - im_skin.width)
                     x = int(im_background.width * 0.96)
 
                 draw.text(
@@ -700,12 +970,16 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
                 )
 
                 if compare_stats:
-                    compare_value, compare_color = self.get_compare_value_and_color(compare_stats[i], user_data["stats"][i][1])
+                    compare_value, compare_color = self.get_compare_value_and_color(
+                        user_data["stats"][i],
+                        compare_stats[i][1]
+                    )
 
                     draw.text(
-                        (stats_box[0] - x, y),
+                        (compare_x, y + font_header_stats.size * 0.9),
                         compare_value,
                         fill=compare_color,
+                        font=font_body_stats,
                         anchor=compare_anchor
                     )
 
@@ -728,8 +1002,10 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
         else:
             raise ValueError(f"Font {query} not found.")
 
-    def get_compare_value_and_color(self, module: tuple, original_value: Union[Any]) -> Tuple[Union[Any], Tuple]:
-        if isinstance(original_value, str):
+    def get_compare_value_and_color(self, module: tuple, original_value: Union[Any]) -> Tuple[Any, Optional[Tuple]]:
+        try:
+            float(module[1])
+        except ValueError:
             return module[1], None
 
         green = (0, 255, 0)
@@ -737,20 +1013,23 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
         negative_list = [
             "loss"
         ]
-        compare = module[1] - original_value
+        compare = float(module[1]) - float(original_value)
+        compare = int(compare) if compare % 1 == 0 else round(compare, 2)
 
         if compare == 0:
-            return compare, None
+            return str(compare), None
 
-        elif compare < 0 :
-            if module[0] in negative_list:
-                return compare, red
-            return compare, green
+        elif compare < 0:
+            for i in negative_list:
+                if module[0] in i:
+                    return str(compare), green
+            return str(compare), red
 
         else:
-            if module[0] in negative_list:
-                return compare, green
-            return compare, red
+            for i in negative_list:
+                if module[0] in i:
+                    return str(compare), red
+            return str(compare), green
 
     def get_level_bedwars(self, xp: int) -> Tuple[int, float]:
         def xp_for_level():
@@ -771,7 +1050,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
                 return level % levels_per_prestige
 
         easy_levels = 4
-        level_scale = {1: 500, 2: 1000, 3: 2000, 4: 3500}
+        level_scale = {1: 500, 2: 1000, 3: 2000, 4: 3500, 5: 5000}
         easy_levels_xp = sum(level_scale.values())
         xp_per_prestige = 96 * 5000 + easy_levels_xp
         levels_per_prestige = 100
@@ -875,7 +1154,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
         except KeyError:
             return 0
 
-    async def fetch_apikey(self, ctx: commands.Context) -> Optional[str]:
+    async def fetch_apikey(self, ctx: commands.Context) -> Tuple[Optional[str], scope]:
         """Guild/User based apikey lookup"""
         user_key = await self.config.user(ctx.author).apikey()
         if not user_key and ctx.guild:
@@ -901,7 +1180,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
         for gamemode, modules in resp["player"]["stats"].items():
             self.all_modules[gamemode.lower()] = [x for x in modules.keys() if isinstance(x, str) or isinstance(x, int)]
 
-    async def maybe_send_images(self, channel: discord.TextChannel, im_list: List[Image.Image]) -> discord.Message:
+    async def maybe_send_images(self, channel: discord.TextChannel, im_list: List[Image.Image]) -> List[discord.Message]:
         """Try to send a list of images to the given channel
         Warns if a permission error occurs"""
         def generate_im_list():
@@ -927,7 +1206,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
             except discord.Forbidden:
                 messages.append(await channel.send("Looks like i do not have the proper permission to send attachments to this channel"))
 
-        # return messages
+        return messages
 
     def wins_key_for_gamemode(self, gamemode: gamemodes) -> Optional[Any]:
         """Returns the hypixel wins api key for the given gamemode"""

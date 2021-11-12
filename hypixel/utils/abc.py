@@ -21,14 +21,14 @@ class MixinMeta(ABC):
     all_modules: list
     autostats_tasks: dict
 
-    """Api requests"""
-    @abstractmethod
-    async def request_hypixel(self, ctx: commands.Context, uuid: str, topic: str = "player", apikey: str = None) -> Tuple[Optional[dict], Optional[int]]:
-        raise NotImplementedError()
-
-    @abstractmethod
-    async def request_mojang(self, mc_name: str) -> Tuple[Optional[dict], Optional[int]]:
-        raise NotImplementedError()
+    # """Api requests"""
+    # @abstractmethod
+    # async def request_hypixel(self, ctx: commands.Context, uuid: str, topic: str = "player", apikey: str = None) -> Tuple[Optional[dict], Optional[int]]:
+    #     raise NotImplementedError()
+    #
+    # @abstractmethod
+    # async def request_mojang(self, mc_name: str) -> Tuple[Optional[dict], Optional[int]]:
+    #     raise NotImplementedError()
 
 
     """Commands"""
@@ -91,7 +91,14 @@ class MixinMeta(ABC):
 
     """Converters"""
     @abstractmethod
-    async def username_list_to_data(self, username_list: list) -> list:
+    async def username_list_to_data(
+            self,
+            ctx: commands.Context,
+            gamemode: gamemodes,
+            username_list: list,
+            active_modules: list = None,
+            custom_modules: dict = None,
+    ) -> list:
         raise NotImplementedError()
 
     @abstractmethod
@@ -110,6 +117,10 @@ class MixinMeta(ABC):
 
 
     """Image gen"""
+    @abstractmethod
+    async def create_stats_img_new(self, user_data: dict, gamemode: gamemodes) -> Image.Image:
+        raise NotImplementedError()
+
     @abstractmethod
     async def create_stats_img(self, user_data: dict, gamemode: gamemodes, compare_stats: list = None) -> Image.Image:
         raise NotImplementedError()
@@ -137,7 +148,7 @@ class MixinMeta(ABC):
 
     """Utils"""
     @abstractmethod
-    def calculate_custom_value(self, custom_module: str) -> Union[float, str]:
+    def calculate_custom_value(self, custom_module: str, gamemode_stats: dict) -> Union[float, str]:
         raise NotImplementedError()
 
     @abstractmethod
@@ -149,7 +160,7 @@ class MixinMeta(ABC):
         raise NotImplementedError()
 
     @abstractmethod
-    async def maybe_send_images(self, channel: discord.TextChannel, im: List[Image.Image]) -> discord.Message:
+    async def maybe_send_images(self, channel: discord.TextChannel, im: List[Image.Image]) -> List[discord.Message]:
         raise NotImplementedError()
 
     @abstractmethod
