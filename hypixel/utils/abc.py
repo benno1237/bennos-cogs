@@ -9,7 +9,7 @@ from typing import Optional, Tuple, Union, List, Any
 from redbot.core import commands, Config
 from redbot.core.bot import Red
 
-from .enums import gamemodes
+from .enums import gamemode, gamemodes
 
 
 class MixinMeta(ABC):
@@ -21,19 +21,9 @@ class MixinMeta(ABC):
     all_modules: list
     autostats_tasks: dict
 
-    # """Api requests"""
-    # @abstractmethod
-    # async def request_hypixel(self, ctx: commands.Context, uuid: str, topic: str = "player", apikey: str = None) -> Tuple[Optional[dict], Optional[int]]:
-    #     raise NotImplementedError()
-    #
-    # @abstractmethod
-    # async def request_mojang(self, mc_name: str) -> Tuple[Optional[dict], Optional[int]]:
-    #     raise NotImplementedError()
-
-
     """Commands"""
     @abstractmethod
-    async def command_autostats(self, ctx: commands.Context, gamemode: gamemodes, *usernames: str) -> None:
+    async def command_autostats(self, ctx: commands.Context, gm: gamemode, *usernames: str) -> None:
         raise NotImplementedError()
 
     @abstractmethod
@@ -65,19 +55,19 @@ class MixinMeta(ABC):
         raise NotImplementedError()
 
     @abstractmethod
-    async def command_hypixelset_modules_add(self, ctx: commands.Context, gamemode: gamemodes, db_key: str, clear_name: str) -> None:
+    async def command_hypixelset_modules_add(self, ctx: commands.Context, gm: gamemode, db_key: str, clear_name: str) -> None:
         raise NotImplementedError()
 
     @abstractmethod
-    async def command_hypixelset_modules_remove(self, ctx: commands.Context, gamemode: gamemodes, db_key: str = None, clear_name: str = None) -> None:
+    async def command_hypixelset_modules_remove(self, ctx: commands.Context, gm: gamemode, db_key: str = None, clear_name: str = None) -> None:
         raise NotImplementedError()
 
     @abstractmethod
-    async def command_hypixelset_modules_reorder(self, ctx: commands.Context, gamemode: gamemodes) -> None:
+    async def command_hypixelset_modules_reorder(self, ctx: commands.Context, gm: gamemode) -> None:
         raise NotImplementedError()
 
     @abstractmethod
-    async def command_hypixelset_modules_list(self, ctx: commands.Context, gamemode: gamemodes) -> None:
+    async def command_hypixelset_modules_list(self, ctx: commands.Context, gm: gamemode) -> None:
         raise NotImplementedError()
 
     @abstractmethod
@@ -85,7 +75,7 @@ class MixinMeta(ABC):
         raise NotImplementedError()
 
     @abstractmethod
-    async def command_stats(self, ctx: commands.Context, gamemode: gamemodes, *usernames: str) -> None:
+    async def command_stats(self, ctx: commands.Context, gm: gamemode, *usernames: str) -> None:
         raise NotImplementedError()
 
 
@@ -94,7 +84,7 @@ class MixinMeta(ABC):
     async def username_list_to_data(
             self,
             ctx: commands.Context,
-            gamemode: gamemodes,
+            gm: gamemode,
             username_list: list,
             active_modules: list = None,
             custom_modules: dict = None,
@@ -102,7 +92,7 @@ class MixinMeta(ABC):
         raise NotImplementedError()
 
     @abstractmethod
-    async def uuid_to_stats(self, ctx: commands.Context, uuid: str, gamemode: gamemodes, active_modules: dict) -> dict:
+    async def uuid_to_stats(self, ctx: commands.Context, uuid: str, gm: gamemode, active_modules: dict) -> dict:
         raise NotImplementedError()
 
 
@@ -118,11 +108,11 @@ class MixinMeta(ABC):
 
     """Image gen"""
     @abstractmethod
-    async def create_stats_img_new(self, user_data: dict, gamemode: gamemodes) -> Image.Image:
+    async def create_stats_img_new(self, user_data: dict, gm: gamemode) -> Image.Image:
         raise NotImplementedError()
 
     @abstractmethod
-    async def create_stats_img(self, user_data: dict, gamemode: gamemodes, compare_stats: list = None) -> Image.Image:
+    async def create_stats_img(self, user_data: dict, gm: gamemode, compare_stats: list = None) -> Image.Image:
         raise NotImplementedError()
 
     @abstractmethod
@@ -142,7 +132,7 @@ class MixinMeta(ABC):
         raise NotImplementedError()
 
     @abstractmethod
-    def render_xp_bar(self, gamemode: gamemodes, xp: int, size: tuple) -> Image.Image:
+    def render_xp_bar(self, gm: gamemode, xp: int, size: tuple) -> Image.Image:
         raise NotImplementedError()
 
 
@@ -161,14 +151,6 @@ class MixinMeta(ABC):
 
     @abstractmethod
     async def maybe_send_images(self, channel: discord.TextChannel, im: List[Image.Image]) -> List[discord.Message]:
-        raise NotImplementedError()
-
-    @abstractmethod
-    def wins_key_for_gamemode(self, gamemode: gamemodes) -> Optional[str]:
-        raise NotImplementedError()
-
-    @abstractmethod
-    def xp_key_for_gamemode(self, gamemode: gamemodes) -> Optional[str]:
         raise NotImplementedError()
 
 
