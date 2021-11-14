@@ -44,10 +44,6 @@ async def request_hypixel(
         try:
             resp_dict = json.loads(await resp.text())
 
-            if topic == "player":
-                for key, value in copy.copy(resp_dict["player"]["stats"]).items():
-                    resp_dict["player"]["stats"][key.lower()] = value
-
             return resp_dict, resp.status
         except json.JSONDecodeError:
             # invalid response?
@@ -101,6 +97,7 @@ class Player:
         self._skin: Optional[Image.Image] = None
         self._xp: Optional[int] = None
         self._stats: Optional[dict] = None
+        self._color: Optional[Tuple] = None
 
         self._apikey: Optional[str] = None
         self._apikey_scope: Optional[scope] = None
@@ -125,13 +122,18 @@ class Player:
         """Returns True if there is a UUID associated to this object"""
         return not not self._uuid
 
-    def xp(self, gm: gamemode):
+    def xp(self, gm: gamemode = None):
         """Returns the player's network XP for the given gamemode"""
-        return
+        if gm and gm.xp_key:
+            return self._stats["stats"].get(gm.xp_key, None)
+        elif not gm:
+            return self._stats["stats"]
+        else:
+            return None
 
     def stats(self, gm: gamemode):
         """Returns the player's stats for the given gamemode"""
-        return self._stats[gamemode.db_name]
+        return self._stats["stats"].get(gm.db_name, None)
 
     async def get_uuid(self):
         if isinstance(self._user_identifier, discord.Member) or len(self._user_identifier) == 18:
@@ -180,6 +182,14 @@ class Player:
         if status == 200 and resp and resp["success"]:
             self._stats = resp["player"]
 
+    async def fetch_user_data(self):
+        if self._user:
+            member_data = await self.config.user(self._user).all()
+            self._skin = member_data["skin"]
+            self._color = member_data["header_color"]
+
+        else:
+            self._color = await self.config.header_color()
 
 class Autostats:
     def __init__(self,
@@ -307,7 +317,7 @@ class SelectionRow(discord.ui.Select):
                 idx = db_keys.index(module)
                 new_modules.append(self.current_modules[idx])
 
-            await self.config.guild(interaction.guild).set_raw(self.gamemode.value, "current_modules", value=new_modules)
+            await self.config.guild(interaction.guild).set_raw(str(self.gamemode), "current_modules", value=new_modules)
             await interaction.response.send_message("Order changed.")
             self.view.stop()
         else:
@@ -339,9 +349,8 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
 
         gamemode_data = {}
         for gm in gamemodes:
-            gm = gm.value
-            if gm == gamemodes.BEDWARS.value: #default modules for bedwars
-                gamemode_data[gm.db_name] = {
+            if gm == gamemodes.BEDWARS: # default modules for bedwars
+                gamemode_data[str(gm.value)] = {
                     "current_modules": [
                         ("games_played_bedwars", "Games played"),
                         ("kills_bedwars", "Kills"),
@@ -358,8 +367,8 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
                         "final_kd": "round((gamemode_stats['final_kills_bedwars'] / gamemode_stats['final_deaths_bedwars']), 2)",
                     },
                 }
-            else: #no defaults present for the rest (mainly because i never played them)
-                gamemode_data[gm.db_name] = {
+            else: # no defaults present for the rest (mainly because i never played them)
+                gamemode_data[str(gm.value)] = {
                     "current_modules": [],
                     "custom_modules": {},
                 }
@@ -380,13 +389,12 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
     """Commands"""
     @commands.guild_only()
     @commands.group(name="autostats", invoke_without_command=True)
-    async def command_autostats(self, ctx: commands.Context, gm: str, *usernames: str) -> None:
+    async def command_autostats(self, ctx: commands.Context, gm: gamemodes, *usernames: str) -> None:
         """Base command for autostats processes"""
-        gm = gamemodes.BEDWARS.value
         user_data = await self.username_list_to_data(ctx, gm, usernames)
 
-        current_modules = await self.config.guild(ctx.guild).get_raw(gm.db_name, "current_modules")
-        custom_modules = await self.config.guild(ctx.guild).get_raw(gm.db_name, "custom_modules")
+        current_modules = await self.config.guild(ctx.guild).get_raw(str(gm), "current_modules")
+        custom_modules = await self.config.guild(ctx.guild).get_raw(str(gm), "custom_modules")
         apikey, key_scope = await self.fetch_apikey(ctx)
 
         if key_scope == scope.GUILD:
@@ -435,7 +443,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
     @commands.command(name="gamemodes")
     async def command_gamemodes(self, ctx) -> None:
         """Lists all available gamemodes"""
-        await ctx.maybe_send_embed("\n".join([gm.db_name for gm in gamemodes]))
+        await ctx.maybe_send_embed("\n".join([gm.value.db_name for gm in gamemodes]))
 
     @commands.group(name="hypixelset")
     async def command_hypixelset(self, ctx: commands.Context) -> None:
@@ -479,9 +487,9 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
         pass
 
     @command_hypixelset_modules.command(name="add")
-    async def command_hypixelset_modules_add(self, ctx: commands.Context, gm: gamemode, db_key: str, clear_name: str) -> None:
+    async def command_hypixelset_modules_add(self, ctx: commands.Context, gm: gamemodes, db_key: str, *, clear_name: str) -> None:
         """Add a module for the given gamemode"""
-        guild_data = await self.config.guild(ctx.guild).get_raw(gm.db_name)
+        guild_data = await self.config.guild(ctx.guild).get_raw(str(gm))
 
         current_modules = guild_data["current_modules"]
         custom_modules = guild_data["custom_modules"]
@@ -492,20 +500,20 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
                 return
 
             current_modules.append((db_key, clear_name))
-            await self.config.guild(ctx.guild).set_raw(gm.db_name, "current_modules", value=current_modules)
+            await self.config.guild(ctx.guild).set_raw(str(gm), "current_modules", value=current_modules)
             await ctx.send(f"Module `{db_key}` added as `{clear_name}`")
         else:
             await ctx.send(f"Module `{db_key}` doesn't seem to be valid.\n"
                            f"Use `{ctx.clean_prefix}hypixelset modules list {gm.db_name}` to retrieve a list of supported ones")
 
     @command_hypixelset_modules.command(name="remove")
-    async def command_hypixelset_modules_remove(self, ctx: commands.Context, gm: gamemode, db_key: str = None, clear_name: str = None) -> None:
+    async def command_hypixelset_modules_remove(self, ctx: commands.Context, gm: gamemodes, db_key: str = None, *, clear_name: str = None) -> None:
         """Remove a module for the given gamemode"""
         if not db_key and not clear_name:
             await ctx.send_help()
             return
 
-        current_modules = await self.config.guild(ctx.guild).get_raw(gm.db_name, "current_modules")
+        current_modules = await self.config.guild(ctx.guild).get_raw(str(gm), "current_modules")
         db_keys = [x[0] for x in current_modules]
         clear_names = [x[1] for x in current_modules]
 
@@ -521,14 +529,14 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
 
         if len(db_keys) != len(current_modules):
             current_modules = [(x, clear_names[idx]) for idx, x in enumerate(db_keys)]
-            await self.config.guild(ctx.guild).set_raw(gm.db_name, "current_modules", value=current_modules)
+            await self.config.guild(ctx.guild).set_raw(str(gm), "current_modules", value=current_modules)
             await ctx.tick()
         else:
             await ctx.send("No matching module found to remove")
 
     @command_hypixelset_modules.command(name="reorder")
-    async def command_hypixelset_modules_reorder(self, ctx: commands.Context, gm: gamemode) -> None:
-        current_modules = await self.config.guild(ctx.guild).get_raw(gm.db_name, "current_modules")
+    async def command_hypixelset_modules_reorder(self, ctx: commands.Context, gm: gamemodes) -> None:
+        current_modules = await self.config.guild(ctx.guild).get_raw(str(gm), "current_modules")
 
         view = discord.ui.View()
         view.add_item(SelectionRow(current_modules, ctx.author, self.config, gm))
@@ -538,7 +546,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
     @command_hypixelset_modules.command(name="list")
     async def command_hypixelset_modules_list(self, ctx: commands.Context, gm: gamemode) -> None:
         """List all modules of a gamemode"""
-        custom_modules = await self.config.guild(ctx.guild).get_raw(gm.db_name, "custom_modules")
+        custom_modules = await self.config.guild(ctx.guild).get_raw(str(gm), "custom_modules")
 
         modules_gamemode = self.all_modules[gm.db_name] + [x[0] for x in custom_modules]
         modules_gamemode = "\n".join(list(map(str, modules_gamemode)))
@@ -555,13 +563,13 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
 
     @commands.guild_only()
     @commands.command(name="stats")
-    async def command_stats(self, ctx, gm: gamemode, *usernames: str) -> None:
+    async def command_stats(self, ctx, gm: gamemodes, *usernames: str) -> None:
         async with ctx.typing():
-            user_data = await self.username_list_to_data(ctx, gamemode=gm, username_list=usernames)
+            user_data = await self.username_list_to_data(ctx, gm=gm, username_list=usernames)
 
             im_list = []
             for user in user_data:
-                im_list.append(await self.create_stats_img(user, gamemode))
+                im_list.append(await self.create_stats_img(user, gm))
 
             await self.maybe_send_images(ctx.channel, im_list)
 
@@ -617,9 +625,9 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
         if ctx.guild:
             guild_data = await self.config.guild(ctx.guild).all()
             if not active_modules:
-                active_modules = await self.config.guild(ctx.guild).get_raw(gm.db_name, "current_modules")
+                active_modules = await self.config.guild(ctx.guild).get_raw(str(gm), "current_modules")
             if not custom_modules:
-                custom_modules = await self.config.guild(ctx.guild).get_raw(gm.db_name, "custom_modules")
+                custom_modules = await self.config.guild(ctx.guild).get_raw(str(gm), "custom_modules")
         else:
             guild_data = None
             header_color = tuple(await self.config.header_color())
@@ -1180,7 +1188,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
 
         self.all_modules = {}
         for gamemode, modules in resp["player"]["stats"].items():
-            self.all_modules[gamemode.lower()] = [x for x in modules.keys() if isinstance(x, str) or isinstance(x, int)]
+            self.all_modules[gamemode] = [x for x in modules.keys() if isinstance(x, str) or isinstance(x, int)]
 
     async def maybe_send_images(self, channel: discord.TextChannel, im_list: List[Image.Image]) -> List[discord.Message]:
         """Try to send a list of images to the given channel

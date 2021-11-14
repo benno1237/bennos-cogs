@@ -1,3 +1,4 @@
+from redbot.core import commands
 import enum
 
 class gamemode:
@@ -14,6 +15,12 @@ class gamemode:
         self._db_name = db_name
         self._clean_name = clean_name if clean_name else db_name
         self._xp_key = xp_key
+
+    def __str__(self):
+        return self.db_name
+
+    def __repr__(self):
+        return f"gamemodes.{self.type_name}: ID: {self.id}, DB_NAME: {self.db_name}, NAME: {self.clean_name}"
 
     @property
     def id(self):
@@ -49,7 +56,7 @@ class gamemodes(enum.Enum):
     BEDWARS = gamemode(
         58, "BEDWARS", "Bedwars", "Bed Wars", "Experience"
     )
-    BUILDBATTLE = gamemode(
+    BUILD_BATTLE = gamemode(
         60, "BUILD_BATTLE", "BuildBattle", "Build Battle"
     )
     DUELS = gamemode(
@@ -58,13 +65,13 @@ class gamemodes(enum.Enum):
     GINGERBREAD = gamemode(
         25, "GINGERBREAD", "GingerBread", "Turbo Kart Racers"
     )
-    HUNGERGAMES = gamemode(
+    SURVIVAL_GAMES = gamemode(
         5, "SURVIVAL_GAMES", "HungerGames", "Blitz Survival Games"
     )
     MCGO = gamemode(
         21, "MCGO", "MCGO", "Cops and Crims"
     )
-    MURDERMYSTERY = gamemode(
+    MURDER_MYSTERY = gamemode(
         59, "MURDER_MYSTERY", "MurderMystery", "Murder Mystery"
     )
     PAINTBALL = gamemode(
@@ -74,15 +81,15 @@ class gamemodes(enum.Enum):
         2, "QUAKECRAFT", "Quake"
     )
     SKYWARS = gamemode(
-        5, "SURVIVAL_GAMES", "HungerGames", "Blitz Survival Games", "skywars_experience"
+        51, "SKYWARS", "SkyWars", "SkyWars", "skywars_experience"
     )
     SKYCLASH = gamemode(
         55, "SKYCLASH", "SkyClash"
     )
-    SPEEDUHC = gamemode(
+    SPEED_UHC = gamemode(
         54, "SPEED_UHC", "SpeedUHC", "Speed UHC"
     )
-    SUPERSMASH = gamemode(
+    SUPER_SMASH = gamemode(
         24, "SUPER_SMASH", "SuperSmash", "Smash Heroes"
     )
     TNTGAMES = gamemode(
@@ -103,6 +110,19 @@ class gamemodes(enum.Enum):
     WALLS3 = gamemode(
         13, "WALLS3", "Walls3", "Mega Walls"
     )
+
+    @classmethod
+    async def convert(cls, ctx, argument):
+        for gm in gamemodes:
+            gm = gm.value
+            if argument == gm.id:
+                return gm
+            elif argument.lower() == gm.type_name.lower():
+                return gm
+            elif argument.lower() == gm.db_name.lower():
+                return gm
+            elif argument.lower() == gm.clean_name.lower():
+                return gm
 
 class scope(enum.Enum):
     GLOBAL = "global"

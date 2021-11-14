@@ -55,19 +55,19 @@ class MixinMeta(ABC):
         raise NotImplementedError()
 
     @abstractmethod
-    async def command_hypixelset_modules_add(self, ctx: commands.Context, gm: gamemode, db_key: str, clear_name: str) -> None:
+    async def command_hypixelset_modules_add(self, ctx: commands.Context, gm: gamemodes, db_key: str, clear_name: str) -> None:
         raise NotImplementedError()
 
     @abstractmethod
-    async def command_hypixelset_modules_remove(self, ctx: commands.Context, gm: gamemode, db_key: str = None, clear_name: str = None) -> None:
+    async def command_hypixelset_modules_remove(self, ctx: commands.Context, gm: gamemodes, db_key: str = None, clear_name: str = None) -> None:
         raise NotImplementedError()
 
     @abstractmethod
-    async def command_hypixelset_modules_reorder(self, ctx: commands.Context, gm: gamemode) -> None:
+    async def command_hypixelset_modules_reorder(self, ctx: commands.Context, gm: gamemodes) -> None:
         raise NotImplementedError()
 
     @abstractmethod
-    async def command_hypixelset_modules_list(self, ctx: commands.Context, gm: gamemode) -> None:
+    async def command_hypixelset_modules_list(self, ctx: commands.Context, gm: gamemodes) -> None:
         raise NotImplementedError()
 
     @abstractmethod
@@ -75,7 +75,7 @@ class MixinMeta(ABC):
         raise NotImplementedError()
 
     @abstractmethod
-    async def command_stats(self, ctx: commands.Context, gm: gamemode, *usernames: str) -> None:
+    async def command_stats(self, ctx: commands.Context, gm: gamemodes, *usernames: str) -> None:
         raise NotImplementedError()
 
 
