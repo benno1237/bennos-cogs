@@ -6,21 +6,21 @@ class gamemode:
             self,
             id: int,
             type_name: str,
-            db_name: str,
+            db_key: str,
             clean_name: str = None,
             xp_key: str = None
     ):
         self._id = id
         self._type_name = type_name
-        self._db_name = db_name
-        self._clean_name = clean_name if clean_name else db_name
+        self._db_key = db_key
+        self._clean_name = clean_name if clean_name else db_key
         self._xp_key = xp_key
 
     def __str__(self):
-        return self.db_name
+        return self.db_key
 
     def __repr__(self):
-        return f"gamemodes.{self.type_name}: ID: {self.id}, DB_NAME: {self.db_name}, NAME: {self.clean_name}"
+        return f"gamemodes.{self.type_name}: ID: {self.id}, DB_KEY: {self.db_key}, NAME: {self.clean_name}"
 
     @property
     def id(self):
@@ -31,8 +31,8 @@ class gamemode:
         return self._type_name
 
     @property
-    def db_name(self):
-        return self._db_name
+    def db_key(self):
+        return self._db_key
 
     @property
     def clean_name(self):
@@ -119,21 +119,60 @@ class gamemodes(enum.Enum):
                 return gm
             elif argument.lower() == gm.type_name.lower():
                 return gm
-            elif argument.lower() == gm.db_name.lower():
+            elif argument.lower() == gm.db_key.lower():
                 return gm
             elif argument.lower() == gm.clean_name.lower():
                 return gm
+
 
 class scope(enum.Enum):
     GLOBAL = "global"
     GUILD = "guild"
     USER = "user"
 
+
 class colortypes(enum.Enum):
     HSB = "hsb"
     HSL = "hsl"
     HSV = "hsv"
     RGB = "rgb"
+
+
+class Rank:
+    def __init__(
+            self,
+            db_key: str,
+            clear_name: str,
+            color: str = None,
+    ):
+        self.db_key = db_key
+        self.clear_name = clear_name
+        self.color = color
+
+
+class Ranks(enum.Enum):
+    DEFAULT = Rank("NORMAL", "")
+    VIP = Rank("VIP", "VIP")
+    VIP_PLUS = Rank("VIP_PLUS", "VIP+")
+    MVP = Rank("MVP", "MVP")
+    MVP_PLUS = Rank("MVP_PLUS", "MVP+")
+    SUPERSTAR = Rank("SUPERSTAR", "MVP++")
+    YOUTUBER = Rank("YOUTUBER", "YOUTUBE")
+    PIG = Rank("PIG+++", "PIG+++")
+    BUILD_TEAM = Rank("BUILD TEAM", "BUILD TEAM")
+    HELPER = Rank("HELPER", "HELPER")
+    MODERATOR = Rank("MODERATOR", "MOD")
+    ADMIN = Rank("ADMIN", "ADMIN")
+    SLOTH = Rank("SLOTH", "SLOTH")
+    OWNER = Rank("OWNER", "OWNER")
+
+    @classmethod
+    async def convert(cls, ctx, argument):
+        for rank in Ranks:
+            if rank.value.db_key == argument:
+                return rank
+
+
 
 
 

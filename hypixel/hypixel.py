@@ -1,6 +1,6 @@
 import aiohttp
 import asyncio
-import copy
+import math
 import discord
 import json
 import MinePI
@@ -17,7 +17,7 @@ from redbot.core.data_manager import cog_data_path, bundled_data_path
 from redbot.core.utils.chat_formatting import box
 
 from .utils.abc import CompositeMetaClass, MixinMeta
-from .utils.enums import gamemode, gamemodes, scope, colortypes
+from .utils.enums import gamemode, gamemodes, scope, colortypes, Ranks
 
 INVALID_API_KEY: Final = "Invalid API key"
 USER_AGENT: Final = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/93.0.4577.82 Safari/537.36"
@@ -78,7 +78,51 @@ async def request_mojang(
             return None, None
 
 
+async def fetch_apikey(ctx: commands.Context, config: Config) -> Tuple[Optional[str], scope]:
+    """Guild/User based apikey lookup"""
+    user_key = await config.user(ctx.author).apikey()
+    if not user_key and ctx.guild:
+        guild_key = await config.guild(ctx.guild).apikey()
+        return guild_key, scope.GLOBAL
+    else:
+        return user_key, scope.USER
+
+
+class Module:
+    """Class representing a single module"""
+    all_modules: Optional[dict] = None
+
+    def __init__(self):
+        self._name: Optional[str] = None
+        self._db_key: Optional[str] = None
+        self._value: Optional[Any] = None
+    
+    @property
+    def name(self):
+        return self._name
+    
+    @property
+    def db_key(self):
+        return self._db_key
+
+    @property
+    def value(self):
+        return self._value
+
+    @property
+    def is_custom(self):
+        if not self._db_key:
+            return True
+
+        return False
+    
+    def get_value(self):
+        if self._db_key in Module.all_modules:
+            return
+
+
 class Player:
+    """Class representing a single hypixel player"""
     def __init__(
             self,
             ctx: commands.Context,
@@ -90,6 +134,7 @@ class Player:
         self._ctx = ctx
         self._user_identifier = user_identifier
         self._config: Config = config
+        self._player_ready: asyncio.Event = asyncio.Event()
 
         self._guild = ctx.guild
         self._uuid: Optional[str] = None
@@ -98,14 +143,17 @@ class Player:
         self._xp: Optional[int] = None
         self._stats: Optional[dict] = None
         self._color: Optional[Tuple] = None
+        self._rank: Optional[str] = "Default"
 
         self._apikey: Optional[str] = None
         self._apikey_scope: Optional[scope] = None
 
+        ctx.bot.loop.create_task(self.initialize())
+
     @property
     def rank(self):
         """Returns the player's Hypixel rank"""
-        return None
+        return self._rank
 
     @property
     def skin(self):
@@ -122,18 +170,88 @@ class Player:
         """Returns True if there is a UUID associated to this object"""
         return not not self._uuid
 
-    def xp(self, gm: gamemode = None):
+    async def wait_for_fully_constructed(self):
+        """Returns true as soon as the object is fully constructed"""
+        await self._player_ready.wait()
+
+    def xp(self, gm: gamemode = None) -> Tuple[int, float]:
         """Returns the player's network XP for the given gamemode"""
         if gm and gm.xp_key:
-            return self._stats["stats"].get(gm.xp_key, None)
+            xp = self._stats["stats"].get(gm.xp_key, 0)
+            if gm == gamemodes.BEDWARS.value:
+                levels_per_prestige: Final = 100
+                level_cost: Final = 5000
+                easy_level_cost = {1: 500, 2: 1000, 3: 2000, 4: 3500}
+                easy_xp = sum(easy_level_cost.values())
+                easy_levels = len(easy_level_cost)
+                prestige_xp = easy_xp + (100 - easy_levels) * level_cost
+
+                levels = (xp // prestige_xp) * levels_per_prestige
+                xp %= prestige_xp
+
+                for i in range(1, easy_levels + 1):
+                    cost = easy_level_cost[i]
+                    if xp >= cost:
+                        levels += 1
+                        xp -= cost
+                    else:
+                        break
+
+                levels += xp // level_cost
+                xp %= level_cost
+
+                next_level = (levels + 1) % levels_per_prestige
+                if next_level in easy_level_cost:
+                    cost = easy_level_cost[next_level]
+                else:
+                    cost = level_cost
+
+                return levels, xp / cost
+
+            elif gm == gamemodes.SKYWARS.value:
+                xps = [0, 20, 70, 150, 250, 500, 1000, 2000, 3500, 5000, 10000, 15000]
+                easy_xp_skywars = 0
+                for i in xps:
+                    easy_xp_skywars += i
+                if xp >= 15000:
+                    level = (xp - 15000) / 10000 + 12
+                    percentage = level % 1.0
+                    return int(level), percentage
+                else:
+                    for i in range(len(xps)):
+                        if xp < xps[i]:
+                            level = i + float(xp - xps[i - 1]) / (xps[i] - xps[i - 1])
+                            percentage = level % 1.0
+                            return int(level), percentage
+
         elif not gm:
-            return self._stats["stats"]
+            xp = self._stats.get("networkExp", 0)
+            fraction, level = math.modf(math.sqrt((2 * xp) + 30625) / 50 - 2.5)
+            return int(level), fraction
         else:
-            return None
+            return 0, 0
 
     def stats(self, gm: gamemode):
         """Returns the player's stats for the given gamemode"""
-        return self._stats["stats"].get(gm.db_name, None)
+        return self._stats["stats"].get(gm.db_key, None)
+
+    def filtered_stats(self, gm: gamemode, modules: list):
+        """Returns the player's stats for the given modules of a gamemode"""
+        if not self.stats(gm):
+            return
+
+        return [self.stats(gm).get(i[0], 0) for i in modules]
+
+    async def initialize(self):
+        await self.get_uuid()
+        self._apikey, self._apikey_scope = await fetch_apikey(self._ctx, self._config)
+
+        if not self._apikey:
+            return
+
+        await self.fetch_stats()
+        await self.fetch_user_data()
+        self._player_ready.set()
 
     async def get_uuid(self):
         if isinstance(self._user_identifier, discord.Member) or len(self._user_identifier) == 18:
@@ -184,18 +302,41 @@ class Player:
 
     async def fetch_user_data(self):
         if self._user:
-            member_data = await self.config.user(self._user).all()
+            member_data = await self._config.user(self._user).all()
             self._skin = member_data["skin"]
             self._color = member_data["header_color"]
 
         else:
-            self._color = await self.config.header_color()
+            self._color = await self._config.header_color()
+
+        package_rank = self._stats.get("rank")
+        rank = self._stats.get("prefix")
+        prefix_raw = self._stats.get("monthlyPackageRank")
+        monthly_package_rank = self._stats.get("newPackageRank")
+        new_package_rank = self._stats.get("packageRank")
+
+        real_rank = None
+
+        if rank and rank != "NORMAL" and not real_rank:
+            real_rank = await Ranks.convert(None, rank)
+
+        elif (monthly_package_rank and monthly_package_rank != "NONE") and not real_rank:
+            real_rank = await Ranks.convert(None, monthly_package_rank)
+
+        elif new_package_rank and not real_rank:
+            real_rank = await Ranks.convert(None, new_package_rank)
+
+        elif package_rank and not real_rank:
+            real_rank = await Ranks.convert(None, package_rank)
+
+        self._rank = real_rank
+
 
 class Autostats:
     def __init__(self,
                  cog,
                  channel: discord.TextChannel,
-                 gm: gamemode,
+                 gm: gamemodes,
                  user_data: dict,
                  apikey: str,
                  current_modules: list,
@@ -443,7 +584,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
     @commands.command(name="gamemodes")
     async def command_gamemodes(self, ctx) -> None:
         """Lists all available gamemodes"""
-        await ctx.maybe_send_embed("\n".join([gm.value.db_name for gm in gamemodes]))
+        await ctx.maybe_send_embed("\n".join([gm.value.db_key for gm in gamemodes]))
 
     @commands.group(name="hypixelset")
     async def command_hypixelset(self, ctx: commands.Context) -> None:
@@ -494,7 +635,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
         current_modules = guild_data["current_modules"]
         custom_modules = guild_data["custom_modules"]
 
-        if db_key in self.all_modules[gm.db_name] or db_key in custom_modules.keys():
+        if db_key in self.all_modules[gm.db_key] or db_key in custom_modules.keys():
             if db_key in [x[0] for x in current_modules]:
                 await ctx.send(f"This module is already added.")
                 return
@@ -504,7 +645,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
             await ctx.send(f"Module `{db_key}` added as `{clear_name}`")
         else:
             await ctx.send(f"Module `{db_key}` doesn't seem to be valid.\n"
-                           f"Use `{ctx.clean_prefix}hypixelset modules list {gm.db_name}` to retrieve a list of supported ones")
+                           f"Use `{ctx.clean_prefix}hypixelset modules list {gm.db_key}` to retrieve a list of supported ones")
 
     @command_hypixelset_modules.command(name="remove")
     async def command_hypixelset_modules_remove(self, ctx: commands.Context, gm: gamemodes, db_key: str = None, *, clear_name: str = None) -> None:
@@ -548,7 +689,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
         """List all modules of a gamemode"""
         custom_modules = await self.config.guild(ctx.guild).get_raw(str(gm), "custom_modules")
 
-        modules_gamemode = self.all_modules[gm.db_name] + [x[0] for x in custom_modules]
+        modules_gamemode = self.all_modules[gm.db_key] + [x[0] for x in custom_modules]
         modules_gamemode = "\n".join(list(map(str, modules_gamemode)))
 
         await ctx.send(file=discord.File(BytesIO(modules_gamemode.encode()), "modules.txt"))
@@ -704,7 +845,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
             apikey, _ = await self.fetch_apikey(ctx)
         resp, status = await request_hypixel(ctx=ctx, uuid=uuid, apikey=apikey, session=self.session)
         if status == 200 and resp:
-            gamemode_data = resp["player"]["stats"][gm.db_name]
+            gamemode_data = resp["player"]["stats"][gm.db_key]
 
             stats = []
             for module in active_modules:
@@ -1104,7 +1245,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
         im = Image.new("RGBA", size)
         draw = ImageDraw.Draw(im)
 
-        level, percentage = getattr(self, f"get_level_{gm.db_name.lower()}")(xp)
+        level, percentage = getattr(self, f"get_level_{gm.db_key.lower()}")(xp)
 
         line_thickness = int(size[1] / 216)
         spacing = int(size[1] / 54)
