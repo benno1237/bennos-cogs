@@ -1,6 +1,7 @@
 import aiohttp
 import discord
 import pathlib
+import asyncio
 
 from abc import ABC, abstractmethod
 from PIL import Image
@@ -17,8 +18,9 @@ class MixinMeta(ABC):
     config: Config
     ctx: commands.Context
     session: aiohttp.ClientSession
+    cog_ready_event: asyncio.Event
 
-    all_modules: list
+    modules: dict
     autostats_tasks: dict
 
     """Commands"""

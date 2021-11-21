@@ -91,11 +91,19 @@ async def fetch_apikey(ctx: commands.Context, config: Config) -> Tuple[Optional[
 class Module:
     """Class representing a single module"""
     all_modules: Optional[dict] = None
+    custom_modules: Optional[dict] = None
 
-    def __init__(self):
-        self._name: Optional[str] = None
-        self._db_key: Optional[str] = None
-        self._value: Optional[Any] = None
+    def __init__(
+            self,
+            name: str,
+            db_key: str = None,
+            calc: str = None,
+            gm: gamemode = None,
+    ):
+        self._name: str = name
+        self._db_key: Optional[str] = db_key
+        self._calc: Optional[str] = calc
+        self._gamemode: Optional[gamemode] = gm
     
     @property
     def name(self):
@@ -106,19 +114,29 @@ class Module:
         return self._db_key
 
     @property
-    def value(self):
-        return self._value
+    def is_custom(self):
+        return bool(self._calc)
+    
+    @property
+    def calculation(self):
+        return self._calc
 
     @property
-    def is_custom(self):
-        if not self._db_key:
-            return True
+    def gamemode(self):
+        return self._gamemode
 
-        return False
-    
-    def get_value(self):
-        if self._db_key in Module.all_modules:
-            return
+    async def get_value(self, player: Player):
+        if not player.stats(self._gamemode):
+            await player.wait_for_fully_constructed()
+
+        stats = player.stats(self._gamemode)
+        if not self.is_custom:
+            return stats.get(self._db_key)
+
+        try:
+            return eval(self._calc)
+        except KeyError:
+            return 0
 
 
 class Player:
@@ -235,13 +253,6 @@ class Player:
         """Returns the player's stats for the given gamemode"""
         return self._stats["stats"].get(gm.db_key, None)
 
-    def filtered_stats(self, gm: gamemode, modules: list):
-        """Returns the player's stats for the given modules of a gamemode"""
-        if not self.stats(gm):
-            return
-
-        return [self.stats(gm).get(i[0], 0) for i in modules]
-
     async def initialize(self):
         await self.get_uuid()
         self._apikey, self._apikey_scope = await fetch_apikey(self._ctx, self._config)
@@ -301,7 +312,7 @@ class Player:
             self._stats = resp["player"]
 
     async def fetch_user_data(self):
-        if self._user:
+        if isinstance(self._user, discord.Member):
             member_data = await self._config.user(self._user).all()
             self._skin = member_data["skin"]
             self._color = member_data["header_color"]
@@ -467,11 +478,14 @@ class SelectionRow(discord.ui.Select):
                 ephemeral=True
             )
 
+
 class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
     def __init__(self, bot):
         self.bot = bot
         self.config = Config.get_conf(self, identifier=365911945565569036, force_registration=True)
         self.session = aiohttp.ClientSession()
+        self.cog_ready_event = asyncio.Event()
+        self.modules = {}
 
         self.autostats_tasks = {
             s.value: {} for s in scope
@@ -526,6 +540,34 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
 
         asyncio.create_task(self.fetch_modules())
 
+    async def initialize(self):
+        Module.all_modules = await self.fetch_modules()
+
+        all_guild_data = await self.config.all_guilds()
+        for guild_id, guild_data in all_guild_data.items():
+            for gm in gamemodes:
+                self.modules[guild_id][str(gm)] = []
+                active_modules = guild_data[str(gm)]["current_modules"]
+                custom_modules = guild_data[str(gm)]["custom_modules"]
+
+                for db_key, name in active_modules:
+                    if db_key in custom_modules.keys():
+                        self.modules[guild_id][str(gm)].append(
+                            Module(
+                                name=name,
+                                calc=custom_modules["db_key"],
+                                gm=gm,
+                            )
+                        )
+                    else:
+                        self.modules[guild_id][str(gm)].append(
+                            Module(
+                                name=name,
+                                db_key=db_key,
+                            )
+                        )
+
+        self.cog_ready_event.set()
 
     """Commands"""
     @commands.guild_only()
@@ -635,7 +677,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
         current_modules = guild_data["current_modules"]
         custom_modules = guild_data["custom_modules"]
 
-        if db_key in self.all_modules[gm.db_key] or db_key in custom_modules.keys():
+        if db_key in Module.all_modules[gm.db_key] or db_key in custom_modules.keys():
             if db_key in [x[0] for x in current_modules]:
                 await ctx.send(f"This module is already added.")
                 return
@@ -689,7 +731,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
         """List all modules of a gamemode"""
         custom_modules = await self.config.guild(ctx.guild).get_raw(str(gm), "custom_modules")
 
-        modules_gamemode = self.all_modules[gm.db_key] + [x[0] for x in custom_modules]
+        modules_gamemode = Module.all_modules[gm.db_key] + [x[0] for x in custom_modules]
         modules_gamemode = "\n".join(list(map(str, modules_gamemode)))
 
         await ctx.send(file=discord.File(BytesIO(modules_gamemode.encode()), "modules.txt"))
@@ -712,6 +754,22 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
             for user in user_data:
                 im_list.append(await self.create_stats_img(user, gm))
 
+            await self.maybe_send_images(ctx.channel, im_list)
+
+    @commands.guild_only()
+    @commands.command(name="stats")
+    async def command_stats(self, ctx, gm: gamemodes, *usernames: str) -> None:
+        async with ctx.typing:
+            users = []
+            for username in usernames:
+                users.append(Player(
+                    ctx,
+                    username,
+                    config=self.config,
+                    session=self.session
+                ))
+
+            im_list = [await self.create_stats_img(user, gm) for user in users]
             await self.maybe_send_images(ctx.channel, im_list)
 
     @commands.command(name="tstats")
@@ -874,6 +932,8 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
         elif not user_key and not await self.config.guild(ctx.guild).apikey():
             await ctx.send("No personal or guild apikey set!")
             raise commands.CheckFailure()
+
+        await self.cog_ready_event.wait()
 
     def cog_unload(self) -> None:
         asyncio.create_task(self.cog_unload_task())
@@ -1327,9 +1387,11 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
             if resp.status == 200:
                 resp = json.loads(await resp.text())
 
-        self.all_modules = {}
+        all_modules = {}
         for gamemode, modules in resp["player"]["stats"].items():
-            self.all_modules[gamemode] = [x for x in modules.keys() if isinstance(x, str) or isinstance(x, int)]
+            all_modules[gamemode] = [x for x in modules.keys() if isinstance(x, str) or isinstance(x, int)]
+
+        return all_modules
 
     async def maybe_send_images(self, channel: discord.TextChannel, im_list: List[Image.Image]) -> List[discord.Message]:
         """Try to send a list of images to the given channel
@@ -1355,7 +1417,11 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
             try:
                 messages.append(await channel.send(files=im_binary_list[i: i + 10]))
             except discord.Forbidden:
-                messages.append(await channel.send("Looks like i do not have the proper permission to send attachments to this channel"))
+                messages.append(
+                    await channel.send(
+                        "Looks like i do not have the proper permission to send attachments to this channel"
+                    )
+                )
 
         return messages
 
