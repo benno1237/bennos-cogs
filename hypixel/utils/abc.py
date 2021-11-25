@@ -10,7 +10,7 @@ from typing import Optional, Tuple, Union, List, Any
 from redbot.core import commands, Config
 from redbot.core.bot import Red
 
-from .enums import gamemode, gamemodes
+from .enums import Gamemode, Gamemodes
 
 
 class MixinMeta(ABC):
@@ -25,7 +25,7 @@ class MixinMeta(ABC):
 
     """Commands"""
     @abstractmethod
-    async def command_autostats(self, ctx: commands.Context, gm: gamemode, *usernames: str) -> None:
+    async def command_autostats(self, ctx: commands.Context, gm: Gamemode, *usernames: str) -> None:
         raise NotImplementedError()
 
     @abstractmethod
@@ -57,19 +57,19 @@ class MixinMeta(ABC):
         raise NotImplementedError()
 
     @abstractmethod
-    async def command_hypixelset_modules_add(self, ctx: commands.Context, gm: gamemodes, db_key: str, clear_name: str) -> None:
+    async def command_hypixelset_modules_add(self, ctx: commands.Context, gm: Gamemodes, db_key: str, clear_name: str) -> None:
         raise NotImplementedError()
 
     @abstractmethod
-    async def command_hypixelset_modules_remove(self, ctx: commands.Context, gm: gamemodes, db_key: str = None, clear_name: str = None) -> None:
+    async def command_hypixelset_modules_remove(self, ctx: commands.Context, gm: Gamemodes, db_key: str = None, clear_name: str = None) -> None:
         raise NotImplementedError()
 
     @abstractmethod
-    async def command_hypixelset_modules_reorder(self, ctx: commands.Context, gm: gamemodes) -> None:
+    async def command_hypixelset_modules_reorder(self, ctx: commands.Context, gm: Gamemodes) -> None:
         raise NotImplementedError()
 
     @abstractmethod
-    async def command_hypixelset_modules_list(self, ctx: commands.Context, gm: gamemodes) -> None:
+    async def command_hypixelset_modules_list(self, ctx: commands.Context, gm: Gamemodes) -> None:
         raise NotImplementedError()
 
     @abstractmethod
@@ -77,24 +77,7 @@ class MixinMeta(ABC):
         raise NotImplementedError()
 
     @abstractmethod
-    async def command_stats(self, ctx: commands.Context, gm: gamemodes, *usernames: str) -> None:
-        raise NotImplementedError()
-
-
-    """Converters"""
-    @abstractmethod
-    async def username_list_to_data(
-            self,
-            ctx: commands.Context,
-            gm: gamemode,
-            username_list: list,
-            active_modules: list = None,
-            custom_modules: dict = None,
-    ) -> list:
-        raise NotImplementedError()
-
-    @abstractmethod
-    async def uuid_to_stats(self, ctx: commands.Context, uuid: str, gm: gamemode, active_modules: dict) -> dict:
+    async def command_stats(self, ctx: commands.Context, gm: Gamemodes, *usernames: str) -> None:
         raise NotImplementedError()
 
 
@@ -110,11 +93,11 @@ class MixinMeta(ABC):
 
     """Image gen"""
     @abstractmethod
-    async def create_stats_img_new(self, user_data: dict, gm: gamemode) -> Image.Image:
+    async def create_stats_img_new(self, player: Any, gm: Gamemode, modules: list) -> Image.Image:
         raise NotImplementedError()
 
     @abstractmethod
-    async def create_stats_img(self, user_data: dict, gm: gamemode, compare_stats: list = None) -> Image.Image:
+    async def create_stats_img(self, player: Any, gm: Gamemode, compare_stats: list = None) -> Image.Image:
         raise NotImplementedError()
 
     @abstractmethod
@@ -122,27 +105,20 @@ class MixinMeta(ABC):
         raise NotImplementedError()
 
     @abstractmethod
-    def get_compare_value_and_color(self, module: Tuple, original_value: Union[Any]) -> Tuple[Union[Any], Tuple]:
+    def get_compare_value_and_color(
+            self,
+            module: Any,
+            original_val: Optional[Union[int, float, str]],
+            c_stats: dict
+    ) -> Tuple[Any, Optional[Tuple]]:
         raise NotImplementedError()
 
     @abstractmethod
-    def get_level_bedwars(self, xp: int) -> Tuple[int, float]:
-        raise NotImplementedError()
-
-    @abstractmethod
-    def get_level_skywars(self, xp: int) -> Tuple[int, float]:
-        raise NotImplementedError()
-
-    @abstractmethod
-    def render_xp_bar(self, gm: gamemode, xp: int, size: tuple) -> Image.Image:
+    def render_xp_bar(self, gm: Gamemode, xp: int, size: tuple) -> Image.Image:
         raise NotImplementedError()
 
 
     """Utils"""
-    @abstractmethod
-    def calculate_custom_value(self, custom_module: str, gamemode_stats: dict) -> Union[float, str]:
-        raise NotImplementedError()
-
     @abstractmethod
     async def fetch_apikey(self, ctx: commands.Context) -> Optional[str]:
         raise NotImplementedError()

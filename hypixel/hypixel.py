@@ -6,6 +6,7 @@ import json
 import MinePI
 import pathlib
 import random
+import re
 
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageColor
@@ -17,7 +18,7 @@ from redbot.core.data_manager import cog_data_path, bundled_data_path
 from redbot.core.utils.chat_formatting import box
 
 from .utils.abc import CompositeMetaClass, MixinMeta
-from .utils.enums import gamemode, gamemodes, scope, colortypes, Ranks
+from .utils.enums import Gamemode, Gamemodes, Scope, ColorTypes, Ranks, Rank
 
 INVALID_API_KEY: Final = "Invalid API key"
 USER_AGENT: Final = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/93.0.4577.82 Safari/537.36"
@@ -78,14 +79,14 @@ async def request_mojang(
             return None, None
 
 
-async def fetch_apikey(ctx: commands.Context, config: Config) -> Tuple[Optional[str], scope]:
+async def fetch_apikey(ctx: commands.Context, config: Config) -> Tuple[Optional[str], Scope]:
     """Guild/User based apikey lookup"""
     user_key = await config.user(ctx.author).apikey()
     if not user_key and ctx.guild:
         guild_key = await config.guild(ctx.guild).apikey()
-        return guild_key, scope.GLOBAL
+        return guild_key, Scope.GLOBAL
     else:
-        return user_key, scope.USER
+        return user_key, Scope.USER
 
 
 class Module:
@@ -98,12 +99,12 @@ class Module:
             name: str,
             db_key: str = None,
             calc: str = None,
-            gm: gamemode = None,
+            gm: Gamemode = None,
     ):
         self._name: str = name
         self._db_key: Optional[str] = db_key
         self._calc: Optional[str] = calc
-        self._gamemode: Optional[gamemode] = gm
+        self._gamemode: Optional[Gamemode] = gm
     
     @property
     def name(self):
@@ -125,33 +126,33 @@ class Module:
     def gamemode(self):
         return self._gamemode
 
-    async def get_value(self, player: Player):
-        if not player.stats(self._gamemode):
-            await player.wait_for_fully_constructed()
+    def get_value(self, player: Optional[Any] = None, stats: Optional[dict] = None):
+        stats = stats if not player else player.stats(self._gamemode)
+        if not stats:
+            return
 
-        stats = player.stats(self._gamemode)
         if not self.is_custom:
             return stats.get(self._db_key)
 
         try:
-            return eval(self._calc)
+            calc = re.sub("{}", f"{stats=}".split("=")[0], self._calc)
+            return eval(calc)
         except KeyError:
             return 0
 
 
 class Player:
     """Class representing a single hypixel player"""
+    session: Optional[aiohttp.ClientSession] = None
+    config: Optional[Config] = None
+
     def __init__(
             self,
             ctx: commands.Context,
             user_identifier: Union[str, discord.Member],
-            config: Config,
-            session: aiohttp.ClientSession,
     ):
-        self._session = session
         self._ctx = ctx
         self._user_identifier = user_identifier
-        self._config: Config = config
         self._player_ready: asyncio.Event = asyncio.Event()
 
         self._guild = ctx.guild
@@ -159,12 +160,12 @@ class Player:
         self._user: Optional[discord.Member] = None
         self._skin: Optional[Image.Image] = None
         self._xp: Optional[int] = None
-        self._stats: Optional[dict] = None
+        self._resp: Optional[dict] = None
         self._color: Optional[Tuple] = None
-        self._rank: Optional[str] = "Default"
+        self._rank: Optional[Ranks] = Ranks.DEFAULT
 
         self._apikey: Optional[str] = None
-        self._apikey_scope: Optional[scope] = None
+        self._apikey_scope: Optional[Scope] = None
 
         ctx.bot.loop.create_task(self.initialize())
 
@@ -177,6 +178,11 @@ class Player:
     def skin(self):
         """Returns the player's raw skin"""
         return self._skin
+
+    @property
+    def name(self):
+        if self._resp:
+            return self._resp.get("playername", str(self._user_identifier))
 
     @property
     def uuid(self):
@@ -192,11 +198,11 @@ class Player:
         """Returns true as soon as the object is fully constructed"""
         await self._player_ready.wait()
 
-    def xp(self, gm: gamemode = None) -> Tuple[int, float]:
+    def xp(self, gm: Gamemode = None) -> Tuple[int, float]:
         """Returns the player's network XP for the given gamemode"""
         if gm and gm.xp_key:
-            xp = self._stats["stats"].get(gm.xp_key, 0)
-            if gm == gamemodes.BEDWARS.value:
+            xp = self.stats(gm).get(gm.xp_key, 0)
+            if gm == Gamemodes.BEDWARS.value:
                 levels_per_prestige: Final = 100
                 level_cost: Final = 5000
                 easy_level_cost = {1: 500, 2: 1000, 3: 2000, 4: 3500}
@@ -226,7 +232,7 @@ class Player:
 
                 return levels, xp / cost
 
-            elif gm == gamemodes.SKYWARS.value:
+            elif gm == Gamemodes.SKYWARS.value:
                 xps = [0, 20, 70, 150, 250, 500, 1000, 2000, 3500, 5000, 10000, 15000]
                 easy_xp_skywars = 0
                 for i in xps:
@@ -243,19 +249,32 @@ class Player:
                             return int(level), percentage
 
         elif not gm:
-            xp = self._stats.get("networkExp", 0)
+            xp = self._resp.get("networkExp", 0)
             fraction, level = math.modf(math.sqrt((2 * xp) + 30625) / 50 - 2.5)
             return int(level), fraction
         else:
             return 0, 0
 
-    def stats(self, gm: gamemode):
+    def filtered_stats(self, gm: Gamemode, modules: list):
+        if not self._resp:
+            return
+
+        stats = []
+        for module in modules:
+            if module.is_custom:
+                stats.append(module.calculation)
+            else:
+                stats.append(self.stats(gm)[module.db_key])
+
+        return stats
+
+    def stats(self, gm: Gamemode):
         """Returns the player's stats for the given gamemode"""
-        return self._stats["stats"].get(gm.db_key, None)
+        return self._resp["stats"].get(gm.db_key, None)
 
     async def initialize(self):
         await self.get_uuid()
-        self._apikey, self._apikey_scope = await fetch_apikey(self._ctx, self._config)
+        self._apikey, self._apikey_scope = await fetch_apikey(self._ctx, Player.config)
 
         if not self._apikey:
             return
@@ -268,7 +287,7 @@ class Player:
         if isinstance(self._user_identifier, discord.Member) or len(self._user_identifier) == 18:
             try:
                 member_obj = await commands.MemberConverter().convert(self._ctx, str(self._user_identifier))
-                uuid = await self._config.user(member_obj).uuid()
+                uuid = await Player.config.user(member_obj).uuid()
                 if uuid:
                     self._user = member_obj
                     self._uuid = uuid
@@ -277,54 +296,55 @@ class Player:
             except commands.BadArgument:
                 pass
 
-        # no MemberObject or ID was passed or the given user has no uuid set
-        # trying a request to mojang servers
-        resp, status = await request_mojang(self._user_identifier, self._session)
-
-        if status == 200 and resp.get("id", None):
-            # request successful, using the uuid returned
-            self._uuid = resp["id"]
         else:
-            # request not successful, trying to convert the rest
-            try:
-                member_obj = await commands.MemberConverter().convert(self._ctx, str(self._user_identifier))
+            # no MemberObject or ID was passed or the given user has no uuid set
+            # trying a request to mojang servers
+            resp, status = await request_mojang(self._user_identifier, Player.session)
 
-                uuid = await self._config.user(member_obj).uuid()
-                if uuid:
-                    self._user = member_obj
-                    self._uuid = uuid
-                    return
+            if status == 200 and resp.get("id", None):
+                # request successful, using the uuid returned
+                self._uuid = resp["id"]
+            else:
+                # request not successful, trying to convert the rest
+                try:
+                    member_obj = await commands.MemberConverter().convert(self._ctx, str(self._user_identifier))
 
-            except commands.BadArgument:
-                pass
+                    uuid = await Player.config.user(member_obj).uuid()
+                    if uuid:
+                        self._user = member_obj
+                        self._uuid = uuid
+                        return
+
+                except commands.BadArgument:
+                    pass
 
     async def fetch_stats(self):
         if not self._uuid:
             return
 
         resp, status = await request_hypixel(
-            session=self._session,
+            session=Player.session,
             apikey=self._apikey,
             uuid=self._uuid,
         )
 
         if status == 200 and resp and resp["success"]:
-            self._stats = resp["player"]
+            self._resp = resp["player"]
 
     async def fetch_user_data(self):
         if isinstance(self._user, discord.Member):
-            member_data = await self._config.user(self._user).all()
+            member_data = await Player.config.user(self._user).all()
             self._skin = member_data["skin"]
             self._color = member_data["header_color"]
 
         else:
-            self._color = await self._config.header_color()
+            self._color = await Player.config.header_color()
 
-        package_rank = self._stats.get("rank")
-        rank = self._stats.get("prefix")
-        prefix_raw = self._stats.get("monthlyPackageRank")
-        monthly_package_rank = self._stats.get("newPackageRank")
-        new_package_rank = self._stats.get("packageRank")
+        package_rank = self._resp.get("rank")
+        rank = self._resp.get("prefix")
+        prefix_raw = self._resp.get("monthlyPackageRank")
+        monthly_package_rank = self._resp.get("newPackageRank")
+        new_package_rank = self._resp.get("packageRank")
 
         real_rank = None
 
@@ -340,6 +360,8 @@ class Player:
         elif package_rank and not real_rank:
             real_rank = await Ranks.convert(None, package_rank)
 
+        if not real_rank:
+            real_rank = Ranks.DEFAULT
         self._rank = real_rank
 
 
@@ -347,66 +369,44 @@ class Autostats:
     def __init__(self,
                  cog,
                  channel: discord.TextChannel,
-                 gm: gamemodes,
-                 user_data: dict,
-                 apikey: str,
-                 current_modules: list,
-                 custom_modules: dict
-            ):
+                 gm: Gamemodes,
+                 users: list,
+                ):
         self.channel: discord.TextChannel = channel
-        self.gamemode: gamemodes = gm
-        self.user_data: list = user_data
-        self.current_modules: list = current_modules
-        self.custom_modules: dict = custom_modules
+        self.gamemode: Gamemodes = gm
+        self.users = users
         self.cog: Hypixel = cog
         self.messages: list = []
-        self.apikey: str = apikey
 
         self.task: asyncio.Task
 
     async def is_updated(self):
-        stats, xp, _ = await self.cog.uuid_to_stats(
-            uuid=self.user_data[0]["uuid"],
-            gm=self.gamemode,
-            active_modules=self.current_modules,
-            custom_modules=self.custom_modules,
-            apikey=self.apikey
-        )
-
-        if stats and stats[0] != self.user_data[0]["stats"][0]:
-            self.user_data[0]["stats"] = stats
-            self.user_data[0]["xp"] = xp
+        user = self.users[0]
+        prev = user.stats(self.gamemode)
+        await user.fetch_stats()
+        if user.stats(self.gamemode)["games_played_bedwars"] != prev["games_played_bedwars"]:
             return True
-        else:
-            return False
+
+        return False
 
     async def main(self):
         try:
             while not self.task.cancelled():
-                previous = self.user_data[0]["stats"]
+                first_previous = self.users[0].stats(self.gamemode)
                 if await self.is_updated():
                     await self.maybe_delete_old_messages()
                     im_list = []
 
-                    for idx, user in enumerate(self.user_data):
-                        if idx:
-                            previous = self.user_data[idx]["stats"]
-                            stats, xp, _ = await self.cog.uuid_to_stats(
-                                uuid=user["uuid"],
-                                gm=self.gamemode,
-                                active_modules=self.current_modules,
-                                custom_modules=self.custom_modules,
-                                apikey=self.apikey
-                            )
-
-                            self.user_data[idx]["stats"] = stats
-                            self.user_data[idx]["xp"] = xp
+                    for user in self.users:
+                        previous = user.stats(self.gamemode)
+                        await user.fetch_stats()
 
                         im_list.append(await self.cog.create_stats_img(
-                            user_data=user,
+                            player=user,
                             gm=self.gamemode,
-                            compare_stats=previous
+                            compare_stats=first_previous if first_previous else previous
                         ))
+                        first_previous = None
 
                     self.messages = await self.cog.maybe_send_images(self.channel, im_list)
                 await asyncio.sleep(10)
@@ -420,18 +420,17 @@ class Autostats:
         except (discord.Forbidden, discord.NotFound):
             pass
 
-    def _exception_catching_callback(self, task: asyncio.Task):
+    @staticmethod
+    def _exception_catching_callback(task: asyncio.Task):
         if task.exception():
             task.result()
 
     async def start(self):
-        im_list = []
-        for user in self.user_data:
-            im_list.append(await self.cog.create_stats_img(user_data=user, gm=self.gamemode))
+        if self.users:
+            im_list = await asyncio.gather(*[self.cog.create_stats_img(user, self.gamemode) for user in self.users])
 
-        self.messages = await self.cog.maybe_send_images(self.channel, im_list)
+            self.messages = await self.cog.maybe_send_images(self.channel, im_list)
 
-        if self.user_data:
             self.task = asyncio.create_task(self.main())
             self.task.add_done_callback(self._exception_catching_callback)
 
@@ -442,9 +441,9 @@ class Autostats:
 
 
 class SelectionRow(discord.ui.Select):
-    def __init__(self, current_modules: list, author: discord.Member, config: Config, gm: gamemode):
+    def __init__(self, current_modules: list, author: discord.Member, config: Config, gm: Gamemode):
         self.config = config
-        self.gamemode = gamemode
+        self.gamemode = gm
         self.author = author
         self.current_modules = current_modules
 
@@ -487,8 +486,11 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
         self.cog_ready_event = asyncio.Event()
         self.modules = {}
 
+        Player.session = self.session
+        Player.config = self.config
+
         self.autostats_tasks = {
-            s.value: {} for s in scope
+            s.value: {} for s in Scope
         }
 
         default_global = {
@@ -503,8 +505,8 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
         }
 
         gamemode_data = {}
-        for gm in gamemodes:
-            if gm == gamemodes.BEDWARS: # default modules for bedwars
+        for gm in Gamemodes:
+            if gm == Gamemodes.BEDWARS: # default modules for bedwars
                 gamemode_data[str(gm.value)] = {
                     "current_modules": [
                         ("games_played_bedwars", "Games played"),
@@ -517,9 +519,9 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
                         ("final_kd", "Final KD")
                     ],
                     "custom_modules": {
-                        "wl_rate": "round((gamemode_stats['wins_bedwars'] / gamemode_stats['losses_bedwars']), 2)",
-                        "normal_kd": "round((gamemode_stats['kills_bedwars'] / gamemode_stats['deaths_bedwars']), 2)",
-                        "final_kd": "round((gamemode_stats['final_kills_bedwars'] / gamemode_stats['final_deaths_bedwars']), 2)",
+                        "wl_rate": "round(({}['wins_bedwars'] / {}['losses_bedwars']), 2)",
+                        "normal_kd": "round(({}['kills_bedwars'] / {}['deaths_bedwars']), 2)",
+                        "final_kd": "round(({}['final_kills_bedwars'] / {}['final_deaths_bedwars']), 2)",
                     },
                 }
             else: # no defaults present for the rest (mainly because i never played them)
@@ -538,32 +540,34 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
         self.config.register_user(**default_user)
         self.config.register_guild(**default_guild)
 
-        asyncio.create_task(self.fetch_modules())
+        bot.loop.create_task(self.initialize())
 
     async def initialize(self):
         Module.all_modules = await self.fetch_modules()
 
-        all_guild_data = await self.config.all_guilds()
-        for guild_id, guild_data in all_guild_data.items():
-            for gm in gamemodes:
-                self.modules[guild_id][str(gm)] = []
-                active_modules = guild_data[str(gm)]["current_modules"]
-                custom_modules = guild_data[str(gm)]["custom_modules"]
+        async for guild in AsyncIter(self.bot.guilds):
+            guild_data = await self.config.guild(guild).all()
+            self.modules[guild.id] = {}
+            for gm in Gamemodes:
+                self.modules[guild.id][str(gm.value)] = []
+                active_modules = guild_data[str(gm.value)]["current_modules"]
+                custom_modules = guild_data[str(gm.value)]["custom_modules"]
 
                 for db_key, name in active_modules:
                     if db_key in custom_modules.keys():
-                        self.modules[guild_id][str(gm)].append(
+                        self.modules[guild.id][str(gm.value)].append(
                             Module(
                                 name=name,
-                                calc=custom_modules["db_key"],
-                                gm=gm,
+                                calc=custom_modules[db_key],
+                                gm=gm.value,
                             )
                         )
                     else:
-                        self.modules[guild_id][str(gm)].append(
+                        self.modules[guild.id][str(gm.value)].append(
                             Module(
                                 name=name,
                                 db_key=db_key,
+                                gm=gm.value,
                             )
                         )
 
@@ -572,37 +576,34 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
     """Commands"""
     @commands.guild_only()
     @commands.group(name="autostats", invoke_without_command=True)
-    async def command_autostats(self, ctx: commands.Context, gm: gamemodes, *usernames: str) -> None:
+    async def command_autostats(self, ctx: commands.Context, gm: Gamemodes, *usernames: str) -> None:
         """Base command for autostats processes"""
-        user_data = await self.username_list_to_data(ctx, gm, usernames)
+        async with ctx.typing():
+            users = [Player(ctx, user_identifier) for user_identifier in usernames]
+            await asyncio.gather(*[user.wait_for_fully_constructed() for user in users])
 
-        current_modules = await self.config.guild(ctx.guild).get_raw(str(gm), "current_modules")
-        custom_modules = await self.config.guild(ctx.guild).get_raw(str(gm), "custom_modules")
-        apikey, key_scope = await self.fetch_apikey(ctx)
+            _, key_scope = await fetch_apikey(ctx, config=self.config)
 
-        if key_scope == scope.GUILD:
-            if len(self.autostats_tasks[key_scope.value]) >= 5:
-                await ctx.send("Already 5 autostats tasks running on the guild apikey. "
-                               f"Set your own apikey using `{ctx.clean_prefix}hypixelset apikey`")
-                return
+            if key_scope == Scope.GUILD:
+                if len(self.autostats_tasks[key_scope.value]) >= 5:
+                    await ctx.send("Already 5 autostats tasks running on the guild apikey. "
+                                   f"Set your own apikey using `{ctx.clean_prefix}hypixelset apikey`")
+                    return
 
-        autostats_task = Autostats(
-            self,
-            ctx.channel,
-            gm,
-            user_data,
-            apikey,
-            current_modules,
-            custom_modules
-        )
+            autostats_task = Autostats(
+                self,
+                ctx.channel,
+                gm,
+                users,
+            )
 
-        self.autostats_tasks[key_scope.value][ctx.author.id] = autostats_task
-        await autostats_task.start()
+            self.autostats_tasks[key_scope.value][ctx.author.id] = autostats_task
+            await autostats_task.start()
 
     @command_autostats.group(name="stop", invoke_without_command=True)
     async def command_autostats_stop(self, ctx: commands.Context) -> None:
         """Stop you current autostats process"""
-        for s in scope:
+        for s in Scope:
             if ctx.author.id in self.autostats_tasks[s.value].keys():
                 await self.autostats_tasks[s.value][ctx.author.id].cancel()
                 del self.autostats_tasks[s.value][ctx.author.id]
@@ -612,10 +613,10 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
         await ctx.send("No running autostats tasks")
 
     @command_autostats_stop.command(name="all")
-    async def command_autostats_stop_all(self, ctx: commands.Context, stop_scope: scope = True) -> None:
+    async def command_autostats_stop_all(self, ctx: commands.Context, stop_scope: Scope = True) -> None:
         """Stop all autostats processes"""
         if self.bot.is_owner(ctx.author) or ctx.guild.owner == ctx.author:
-            if stop_scope == scope.GUILD:
+            if stop_scope == Scope.GUILD:
                 for task in self.autostats_tasks[stop_scope.value].values():
                     await task.cancel()
 
@@ -626,7 +627,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
     @commands.command(name="gamemodes")
     async def command_gamemodes(self, ctx) -> None:
         """Lists all available gamemodes"""
-        await ctx.maybe_send_embed("\n".join([gm.value.db_key for gm in gamemodes]))
+        await ctx.maybe_send_embed("\n".join([gm.value.db_key for gm in Gamemodes]))
 
     @commands.group(name="hypixelset")
     async def command_hypixelset(self, ctx: commands.Context) -> None:
@@ -649,11 +650,11 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
             await ctx.send("This apikey doesn't seem to be valid!")
 
     @command_hypixelset.command(name="color", aliases=["colour"])
-    async def command_hypixelset_color(self, ctx: commands.Context, color: str, type: colortypes = None) -> None:
+    async def command_hypixelset_color(self, ctx: commands.Context, color: str, ctype: ColorTypes = None) -> None:
         """Custom header color"""
         try:
-            if type:
-                color = ImageColor.getrgb(f"{type.value}{color}")
+            if ctype:
+                color = ImageColor.getrgb(f"{ctype.value}{color}")
             else:
                 color = ImageColor.getrgb(color)
         except ValueError:
@@ -670,7 +671,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
         pass
 
     @command_hypixelset_modules.command(name="add")
-    async def command_hypixelset_modules_add(self, ctx: commands.Context, gm: gamemodes, db_key: str, *, clear_name: str) -> None:
+    async def command_hypixelset_modules_add(self, ctx: commands.Context, gm: Gamemodes, db_key: str, *, clear_name: str) -> None:
         """Add a module for the given gamemode"""
         guild_data = await self.config.guild(ctx.guild).get_raw(str(gm))
 
@@ -690,7 +691,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
                            f"Use `{ctx.clean_prefix}hypixelset modules list {gm.db_key}` to retrieve a list of supported ones")
 
     @command_hypixelset_modules.command(name="remove")
-    async def command_hypixelset_modules_remove(self, ctx: commands.Context, gm: gamemodes, db_key: str = None, *, clear_name: str = None) -> None:
+    async def command_hypixelset_modules_remove(self, ctx: commands.Context, gm: Gamemodes, db_key: str = None, *, clear_name: str = None) -> None:
         """Remove a module for the given gamemode"""
         if not db_key and not clear_name:
             await ctx.send_help()
@@ -718,7 +719,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
             await ctx.send("No matching module found to remove")
 
     @command_hypixelset_modules.command(name="reorder")
-    async def command_hypixelset_modules_reorder(self, ctx: commands.Context, gm: gamemodes) -> None:
+    async def command_hypixelset_modules_reorder(self, ctx: commands.Context, gm: Gamemodes) -> None:
         current_modules = await self.config.guild(ctx.guild).get_raw(str(gm), "current_modules")
 
         view = discord.ui.View()
@@ -727,7 +728,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
         await ctx.send("Select the modules in your preferred order: ", view=view)
 
     @command_hypixelset_modules.command(name="list")
-    async def command_hypixelset_modules_list(self, ctx: commands.Context, gm: gamemode) -> None:
+    async def command_hypixelset_modules_list(self, ctx: commands.Context, gm: Gamemode) -> None:
         """List all modules of a gamemode"""
         custom_modules = await self.config.guild(ctx.guild).get_raw(str(gm), "custom_modules")
 
@@ -746,34 +747,25 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
 
     @commands.guild_only()
     @commands.command(name="stats")
-    async def command_stats(self, ctx, gm: gamemodes, *usernames: str) -> None:
+    async def command_stats(self, ctx, gm: Gamemodes, *usernames: str) -> None:
+        if not usernames:
+            usernames = [ctx.author]
+
         async with ctx.typing():
-            user_data = await self.username_list_to_data(ctx, gm=gm, username_list=usernames)
-
-            im_list = []
-            for user in user_data:
-                im_list.append(await self.create_stats_img(user, gm))
-
-            await self.maybe_send_images(ctx.channel, im_list)
-
-    @commands.guild_only()
-    @commands.command(name="stats")
-    async def command_stats(self, ctx, gm: gamemodes, *usernames: str) -> None:
-        async with ctx.typing:
             users = []
             for username in usernames:
                 users.append(Player(
                     ctx,
                     username,
-                    config=self.config,
-                    session=self.session
                 ))
 
-            im_list = [await self.create_stats_img(user, gm) for user in users]
+            await asyncio.gather(*[user.wait_for_fully_constructed() for user in users])
+            im_list = await asyncio.gather(*[self.create_stats_img(user, gm) for user in users])
+
             await self.maybe_send_images(ctx.channel, im_list)
 
     @commands.command(name="tstats")
-    async def command_tstats(self, ctx):
+    async def command_tstats(self, ctx, user: str = None):
         active_modules = [
             ("wins_bedwars", "Wins"),
             ("kills_bedwars", "Kills"),
@@ -791,132 +783,45 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
             ("beds_destroyed_lost_rate", "BDLR"),
             ("beds_per_game", "Beds/Game"),
         ]
+
         custom_modules = {
-            "kills_per_game": "round(gamemode_stats['kills_bedwars'] / gamemode_stats['games_played_bedwars'], 2)",
-            "final_kills_per_game": "round(gamemode_stats['final_kills_bedwars'] / gamemode_stats['games_played_bedwars'], 2)",
-            "win_loose_rate": "round(gamemode_stats['games_played_bedwars'] / gamemode_stats['wins_bedwars'], 2)",
-            "kill_death_rate": "round(gamemode_stats['kills_bedwars'] / gamemode_stats['deaths_bedwars'], 2)",
-            "final_kill_death_rate": "round(gamemode_stats['final_kills_bedwars'] / gamemode_stats['final_deaths_bedwars'], 2)",
-            "beds_destroyed_lost_rate": "round(gamemode_stats['beds_broken_bedwars'] / gamemode_stats['beds_lost_bedwars'], 2)",
-            "beds_per_game": "round(gamemode_stats['beds_broken_bedwars'] / gamemode_stats['games_played_bedwars'], 2)",
+            "kills_per_game": "round({}['kills_bedwars'] / {}['games_played_bedwars'], 2)",
+            "final_kills_per_game": "round({}['final_kills_bedwars'] / {}['games_played_bedwars'], 2)",
+            "win_loose_rate": "round({}['games_played_bedwars'] / {}['wins_bedwars'], 2)",
+            "kill_death_rate": "round({}['kills_bedwars'] / {}['deaths_bedwars'], 2)",
+            "final_kill_death_rate": "round({}['final_kills_bedwars'] / {}['final_deaths_bedwars'], 2)",
+            "beds_destroyed_lost_rate": "round({}['beds_broken_bedwars'] / {}['beds_lost_bedwars'], 2)",
+            "beds_per_game": "round({}['beds_broken_bedwars'] / {}['games_played_bedwars'], 2)",
         }
 
+        modules = []
+        for module in active_modules:
+            if module[0] in custom_modules.keys():
+                modules.append(
+                    Module(
+                        module[1],
+                        calc=custom_modules[module[0]],
+                        gm=Gamemodes.BEDWARS.value,
+                    )
+                )
+            else:
+                modules.append(
+                    Module(
+                        module[1],
+                        db_key=module[0],
+                        gm=Gamemodes.BEDWARS.value,
+                    )
+                )
+
         async with ctx.typing():
-            user_data = await self.username_list_to_data(
+            user = Player(
                 ctx,
-                gamemode=gamemodes.BEDWARS,
-                username_list=["sucr_kolli"],
-                active_modules=active_modules,
-                custom_modules=custom_modules,
+                user if user else ctx.author,
             )
 
-            await self.maybe_send_images(ctx.channel, [await self.create_stats_img_new(user_data[0], gamemodes.BEDWARS)])
-
-    """Converters"""
-    async def username_list_to_data(
-            self,
-            ctx,
-            gm: gamemode,
-            username_list: list,
-            active_modules: list = None,
-            custom_modules: dict = None,
-    ) -> list:
-        if ctx.guild:
-            guild_data = await self.config.guild(ctx.guild).all()
-            if not active_modules:
-                active_modules = await self.config.guild(ctx.guild).get_raw(str(gm), "current_modules")
-            if not custom_modules:
-                custom_modules = await self.config.guild(ctx.guild).get_raw(str(gm), "custom_modules")
-        else:
-            guild_data = None
-            header_color = tuple(await self.config.header_color())
-
-        if not username_list:
-            username_list = [str(ctx.author.id)]
-
-        user_data = []
-        failed = []
-        async for username in AsyncIter(username_list):
-            #trying a direct request first
-            if 16 >= len(username) >= 3:
-                uuid_resp, status = await request_mojang(username, session=self.session)
-                if uuid_resp and status == 200:
-                    try:
-                        data, xp, username = await self.uuid_to_stats(uuid_resp["id"], gm, active_modules, custom_modules, ctx=ctx)
-
-                        user_data.append({
-                            "stats": data,
-                            "header_color": tuple(guild_data["header_color"]) if guild_data else header_color,
-                            "username": username,
-                            "uuid": uuid_resp["id"],
-                            "skin": None,
-                            "xp": xp
-                        })
-                        continue
-                    except ValueError:
-                        pass
-                    except KeyError:
-                        pass
-
-            #if it fails, try to convert the username to a discord.User object
-            try:
-                user_obj = await commands.UserConverter().convert(ctx, username)
-                user_conf = await self.config.user(user_obj).all()
-
-                if not user_conf["uuid"]:
-                    failed.append(username)
-                    continue
-
-                data, xp, username = await self.uuid_to_stats(user_conf["uuid"], gm, active_modules, custom_modules, ctx=ctx)
-                user_data.append({
-                    "stats": data,
-                    "header_color": (tuple(user_conf["header_color"])
-                                     if user_conf["header_color"]
-                                     else tuple(guild_data["header_color"])
-                                        if guild_data["header_color"]
-                                        else header_color),
-                    "username": username,
-                    "uuid": user_conf["uuid"],
-                    "skin": user_conf["skin"],
-                    "xp": xp
-                })
-
-            except commands.BadArgument:
-                failed.append(username)
-
-        if failed:
-            text = box("\n".join(failed))
-            await ctx.send("Stats for the following users couldn't be fetched. "
-                           "Make sure a username is set if you pass a discord user. \n\n"
-                            f"{text}")
-
-        return user_data
-
-    async def uuid_to_stats(self,
-                            uuid: str,
-                            gm: gamemode,
-                            active_modules: list,
-                            custom_modules: dict,
-                            ctx: commands.Context = None,
-                            apikey: str = None) -> Optional[Tuple[List, Any, Any]]:
-        if not apikey:
-            apikey, _ = await self.fetch_apikey(ctx)
-        resp, status = await request_hypixel(ctx=ctx, uuid=uuid, apikey=apikey, session=self.session)
-        if status == 200 and resp:
-            gamemode_data = resp["player"]["stats"][gm.db_key]
-
-            stats = []
-            for module in active_modules:
-                if module[0] in custom_modules.keys():
-                    value = self.calculate_custom_value(custom_modules[module[0]], gamemode_data)
-                else:
-                    value = gamemode_data.get(module[0], 0)
-                stats.append((str(module[1]), str(value)))
-
-            return stats, gamemode_data[gm.xp_key], resp["player"]["playername"]
-
-        else:
-            return [], 0, ""
+            await user.wait_for_fully_constructed()
+            im = await self.create_stats_img_new(user, gm=Gamemodes.BEDWARS.value, modules=modules)
+            await self.maybe_send_images(ctx.channel, [im])
 
 
     """Dpy Events"""
@@ -939,7 +844,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
         asyncio.create_task(self.cog_unload_task())
 
     async def cog_unload_task(self) -> None:
-        for s in scope:
+        for s in Scope:
             for task in self.autostats_tasks[s.value].values():
                 await task.cancel()
 
@@ -947,7 +852,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
 
 
     """Image gen"""
-    async def create_stats_img_new(self, user_data: dict, gm: gamemode):
+    async def create_stats_img_new(self, player: Player, gm: Gamemode, modules: list):
         datapath: pathlib.Path = cog_data_path(self)
         background_path: pathlib.Path = datapath / "backgrounds"
 
@@ -969,7 +874,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
         draw.text(
             (x_top[0], (y_top[1] / 2 - y_top[0])),
             font=font,
-            text=user_data["username"],
+            text=player.name,
             anchor="lm",
         )
 
@@ -986,29 +891,30 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
         pos_x = start_x
 
         start_y = y[0] + im_background.width / 100
-        spacing_y = (y[1] - y[0]) / int(len(user_data["stats"]) / 3)
-        pos_y = [start_y + spacing_y * x for x in range(int(len(user_data["stats"]) / 3))]
+        spacing_y = (y[1] - y[0]) / int(len(modules) / 3)
+        pos_y = [start_y + spacing_y * x for x in range(int(len(modules) / 3))]
 
-        for idx, module in enumerate(user_data["stats"]):
-            if idx < (len(user_data["stats"]) / 3):
-                color = colors[0] if (idx + 1) % int(len(user_data["stats"]) / 3) else colors[3]
-            elif idx < (len(user_data["stats"]) / 3) * 2:
+        for idx, module in enumerate(modules):
+            if idx < (len(modules) / 3):
+                color = colors[0] if (idx + 1) % int(len(modules) / 3) else colors[3]
+            elif idx < (len(modules) / 3) * 2:
                 pos_x = start_x + spacing_x
-                color = colors[1] if (idx + 1) % int(len(user_data["stats"]) / 3) else colors[3]
-            elif idx >= (len(user_data["stats"]) / 3) * 2:
+                color = colors[1] if (idx + 1) % int(len(modules) / 3) else colors[3]
+            elif idx >= (len(modules) / 3) * 2:
                 pos_x = start_x + spacing_x * 2
-                color = colors[2] if (idx + 1) % int(len(user_data["stats"]) / 3) else colors[3]
+                color = colors[2] if (idx + 1) % int(len(modules) / 3) else colors[3]
 
+            val = str(module.get_value(player))
             draw.text(
-                (pos_x, pos_y[idx % int(len(user_data["stats"]) / 3)]),
-                text=f"{module[1]}",
+                (pos_x, pos_y[idx % int(len(modules) / 3)]),
+                text=val,
                 font=font,
                 anchor="lt",
                 fill=color,
             )
             draw.text(
-                (pos_x + font.getlength(module[1] + " "), pos_y[idx % int(len(user_data["stats"]) / 3)]),
-                text=f"{module[0]}",
+                (pos_x + font.getlength(val + " "), pos_y[idx % int(len(modules) / 3)]),
+                text=module.name,
                 font=font,
                 anchor="lt",
             )
@@ -1025,13 +931,13 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
             (0, 0, 0, 0, 0, 0, 0),
         ])
         im_skin = await MinePI.render_3d_skin(
-            user_data["uuid"],
+            player.uuid,
             *pos,
             12,
             True,
             True,
             False,
-            skin_image=user_data["skin"]
+            skin_image=player.skin
         )
 
         height = y[1] - y[0] - im_background.height / 25
@@ -1045,7 +951,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
 
         return im_background
 
-    async def create_stats_img(self, user_data: dict, gm: gamemode, compare_stats: list = None) -> Image.Image:
+    async def create_stats_img(self, player: Player, gm: Gamemode, compare_stats: list = None) -> Image.Image:
         datapath: pathlib.Path = cog_data_path(self)
         background_path: pathlib.Path = datapath / "backgrounds"
 
@@ -1073,15 +979,16 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
             (0, 0, 0, 0, 0, 0, 0),
         ])
         im_skin = await MinePI.render_3d_skin(
-            user_data["uuid"],
+            player.uuid,
             *pos,
             12,
             True,
             True,
             False,
-            skin_image=user_data["skin"]
+            skin_image=player.skin
         )
 
+        modules = self.modules[player._ctx.guild.id][str(gm)]
         def generate_image(im_skin):
             # fetch available fonts
             font_header_player_path = self.fetch_font(datapath, "header_player")
@@ -1091,13 +998,13 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
             font_header_player = ImageFont.truetype(str(font_header_player_path), int(im_background.height / 6.5))
             font_header_stats = ImageFont.truetype(str(font_header_stats_path), int(im_background.height / 8))
 
-            modules_left = int(len(user_data["stats"]) / 2 + 1) if len(user_data["stats"]) % 2 else int(len(user_data["stats"]) / 2)
+            modules_left = int(len(modules) / 2 + 1) if len(modules) % 2 else int(len(modules) / 2)
 
             height = int(im_background.height / 1.4)
             width = int(height * (im_skin.width / im_skin.height))
             im_skin = im_skin.resize((width, height), resample=Image.BOX)
 
-            if len(user_data["stats"]) > 5:
+            if len(modules) > 5:
                 x = int((im_background.width / 2) - (im_skin.width / 2))
                 stats_box = (
                     im_background.width / 2 - im_skin.width / 2 - im_background.width / 15,
@@ -1128,7 +1035,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
 
             y_pos = sorted(y_pos)
 
-            longest_item = max([x[0] for x in user_data["stats"]], key=len)
+            longest_item = max([x.name for x in modules], key=len)
             length = font_header_stats.getlength(longest_item)
             if length > stats_box[0]:
                 font_size = font_header_stats.size * (stats_box[0] / length)
@@ -1139,8 +1046,8 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
 
             draw.text(
                 ((im_background.width / 2), im_background.height / 100),
-                user_data["username"],
-                fill=user_data["header_color"],
+                player.name,
+                fill=player.rank.value.color,
                 font=font_header_player,
                 anchor="mt"
             )
@@ -1149,7 +1056,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
             x = int(im_background.width / 25)
             compare_x = stats_box[0]
             header_margin = int(font_header_player.size + im_background.height / 100)
-            for i in range(0, len(user_data["stats"])):
+            for i, module in enumerate(modules):
                 try:
                     y = y_pos[i] + header_margin
                 except IndexError:
@@ -1166,7 +1073,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
 
                 draw.text(
                     (x, y),
-                    user_data["stats"][i][0],
+                    module.name,
                     fill=color_header_stats,
                     font=font_header_stats,
                     anchor=anchor
@@ -1174,7 +1081,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
 
                 draw.text(
                     (x, y + font_header_stats.size * 0.9),
-                    user_data["stats"][i][1],
+                    str(module.get_value(player)),
                     fill=color_body_stats,
                     font=font_body_stats,
                     anchor=anchor
@@ -1182,8 +1089,9 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
 
                 if compare_stats:
                     compare_value, compare_color = self.get_compare_value_and_color(
-                        user_data["stats"][i],
-                        compare_stats[i][1]
+                        module,
+                        player,
+                        compare_stats,
                     )
 
                     draw.text(
@@ -1194,7 +1102,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
                         anchor=compare_anchor
                     )
 
-            xp_bar_im = self.render_xp_bar(gm, user_data["xp"], im_background.size)
+            xp_bar_im = self.render_xp_bar(gm, *player.xp(gm), im_background.size)
             im_background.alpha_composite(xp_bar_im, (0, 0))
 
         await self.bot.loop.run_in_executor(
@@ -1213,18 +1121,23 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
         else:
             raise ValueError(f"Font {query} not found.")
 
-    def get_compare_value_and_color(self, module: tuple, original_value: Union[Any]) -> Tuple[Any, Optional[Tuple]]:
+    def get_compare_value_and_color(
+            self,
+            module: Module,
+            original_val: Optional[Union[int, float, str]],
+            c_stats: dict
+    ) -> Tuple[Any, Optional[Tuple]]:
         try:
-            float(module[1])
+            float(original_val)
         except ValueError:
-            return module[1], None
+            return original_val, None
 
         green = (0, 255, 0)
         red = (255, 0, 0)
         negative_list = [
             "loss"
         ]
-        compare = float(module[1]) - float(original_value)
+        compare = module.get_value(c_stats) - original_val
         compare = int(compare) if compare % 1 == 0 else round(compare, 2)
 
         if compare == 0:
@@ -1232,80 +1145,19 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
 
         elif compare < 0:
             for i in negative_list:
-                if module[0] in i:
+                if module.db_key in i:
                     return str(compare), green
             return str(compare), red
 
         else:
             for i in negative_list:
-                if module[0] in i:
+                if module.db_key in i:
                     return str(compare), red
             return str(compare), green
 
-    def get_level_bedwars(self, xp: int) -> Tuple[int, float]:
-        def xp_for_level():
-            if level == 0:
-                return 0
-
-            respected_level = level_respecting_prestige()
-
-            if respected_level > easy_levels:
-                return 5000
-            else:
-                return level_scale.get(respected_level, 0)
-
-        def level_respecting_prestige():
-            if level > (highest_prestige * levels_per_prestige):
-                return level - (highest_prestige * levels_per_prestige)
-            else:
-                return level % levels_per_prestige
-
-        easy_levels = 4
-        level_scale = {1: 500, 2: 1000, 3: 2000, 4: 3500, 5: 5000}
-        easy_levels_xp = sum(level_scale.values())
-        xp_per_prestige = 96 * 5000 + easy_levels_xp
-        levels_per_prestige = 100
-        highest_prestige = 10
-
-        prestiges = int(xp / xp_per_prestige)
-        level = prestiges * levels_per_prestige
-        xp_without_prestige = xp - (prestiges * xp_per_prestige)
-
-        for i in range(1, easy_levels + 1):
-            xp_for_easy_level = xp_for_level()
-            if xp_without_prestige < xp_for_easy_level:
-                break
-
-            level += 1
-            xp_without_prestige -= xp_for_easy_level
-
-        level_total = int(level + xp_without_prestige / 5000)
-        if level_total % 100 > 4:
-            xp_for_easy_level = 5000
-        percentage = (level + xp_without_prestige / xp_for_easy_level) % 1.0
-        return level_total, percentage
-
-    def get_level_skywars(self, xp: int) -> Tuple[int, float]:
-        xps = [0, 20, 70, 150, 250, 500, 1000, 2000, 3500, 5000, 10000, 15000]
-        easy_xp_skywars = 0
-        for i in xps:
-            easy_xp_skywars += i
-        if xp >= 15000:
-            level = (xp - 15000) / 10000 + 12
-            percentage = level % 1.0
-            return int(level), percentage
-        else:
-            for i in range(len(xps)):
-                if xp < xps[i]:
-                    level = i + float(xp - xps[i - 1]) / (xps[i] - xps[i - 1])
-                    percentage = level % 1.0
-                    return int(level), percentage
-
-    def render_xp_bar(self, gm: gamemode, xp: int, size: tuple):
+    def render_xp_bar(self, gm: Gamemode, level: int, percentage: float, size: tuple):
         im = Image.new("RGBA", size)
         draw = ImageDraw.Draw(im)
-
-        level, percentage = getattr(self, f"get_level_{gm.db_key.lower()}")(xp)
 
         line_thickness = int(size[1] / 216)
         spacing = int(size[1] / 54)
@@ -1359,20 +1211,14 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
         return im
 
     """Utility functions"""
-    def calculate_custom_value(self, custom_module: str, gamemode_stats: dict) -> Union[float, int]:
-        try:
-            return eval(custom_module)
-        except KeyError:
-            return 0
-
-    async def fetch_apikey(self, ctx: commands.Context) -> Tuple[Optional[str], scope]:
+    async def fetch_apikey(self, ctx: commands.Context) -> Tuple[Optional[str], Scope]:
         """Guild/User based apikey lookup"""
         user_key = await self.config.user(ctx.author).apikey()
         if not user_key and ctx.guild:
             guild_key = await self.config.guild(ctx.guild).apikey()
-            return guild_key, scope.GLOBAL
+            return guild_key, Scope.GLOBAL
         else:
-            return user_key, scope.USER
+            return user_key, Scope.USER
 
     async def fetch_modules(self) -> None:
         """Fetch all available hypixel modules"""
@@ -1388,8 +1234,8 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
                 resp = json.loads(await resp.text())
 
         all_modules = {}
-        for gamemode, modules in resp["player"]["stats"].items():
-            all_modules[gamemode] = [x for x in modules.keys() if isinstance(x, str) or isinstance(x, int)]
+        for gm, modules in resp["player"]["stats"].items():
+            all_modules[gm] = [x for x in modules.keys() if isinstance(x, str) or isinstance(x, int)]
 
         return all_modules
 

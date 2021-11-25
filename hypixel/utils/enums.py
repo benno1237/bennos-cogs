@@ -1,7 +1,7 @@
 from redbot.core import commands
 import enum
 
-class gamemode:
+class Gamemode:
     def __init__(
             self,
             id: int,
@@ -43,77 +43,77 @@ class gamemode:
         return self._xp_key
 
 
-class gamemodes(enum.Enum):
-    ARCADE = gamemode(
+class Gamemodes(enum.Enum):
+    ARCADE = Gamemode(
         14, "ARCADE", "Arcade"
     )
-    ARENA = gamemode(
+    ARENA = Gamemode(
         17, "ARENA", "Arena"
     )
-    BATTLEGROUND = gamemode(
+    BATTLEGROUND = Gamemode(
         23, "BATTLEGROUND", "Battleground", "Warlords"
     )
-    BEDWARS = gamemode(
+    BEDWARS = Gamemode(
         58, "BEDWARS", "Bedwars", "Bed Wars", "Experience"
     )
-    BUILD_BATTLE = gamemode(
+    BUILD_BATTLE = Gamemode(
         60, "BUILD_BATTLE", "BuildBattle", "Build Battle"
     )
-    DUELS = gamemode(
+    DUELS = Gamemode(
         61, "DUELS", "Duels"
     )
-    GINGERBREAD = gamemode(
+    GINGERBREAD = Gamemode(
         25, "GINGERBREAD", "GingerBread", "Turbo Kart Racers"
     )
-    SURVIVAL_GAMES = gamemode(
+    SURVIVAL_GAMES = Gamemode(
         5, "SURVIVAL_GAMES", "HungerGames", "Blitz Survival Games"
     )
-    MCGO = gamemode(
+    MCGO = Gamemode(
         21, "MCGO", "MCGO", "Cops and Crims"
     )
-    MURDER_MYSTERY = gamemode(
+    MURDER_MYSTERY = Gamemode(
         59, "MURDER_MYSTERY", "MurderMystery", "Murder Mystery"
     )
-    PAINTBALL = gamemode(
+    PAINTBALL = Gamemode(
         4, "PAINTBALL", "Paintball"
     )
-    QUAKECRAFT = gamemode(
+    QUAKECRAFT = Gamemode(
         2, "QUAKECRAFT", "Quake"
     )
-    SKYWARS = gamemode(
+    SKYWARS = Gamemode(
         51, "SKYWARS", "SkyWars", "SkyWars", "skywars_experience"
     )
-    SKYCLASH = gamemode(
+    SKYCLASH = Gamemode(
         55, "SKYCLASH", "SkyClash"
     )
-    SPEED_UHC = gamemode(
+    SPEED_UHC = Gamemode(
         54, "SPEED_UHC", "SpeedUHC", "Speed UHC"
     )
-    SUPER_SMASH = gamemode(
+    SUPER_SMASH = Gamemode(
         24, "SUPER_SMASH", "SuperSmash", "Smash Heroes"
     )
-    TNTGAMES = gamemode(
+    TNTGAMES = Gamemode(
         6, "TNTGAMES", "TNTGames", "TNT Games"
     )
-    TRUECOMBAT = gamemode(
+    TRUECOMBAT = Gamemode(
         52, "TRUECOMBAT", "TrueCombat", "Crazy Walls"
     )
-    UHC = gamemode(
+    UHC = Gamemode(
         20, "UHC", "UHC", "UHC Champions"
     )
-    VAMPIREZ = gamemode(
+    VAMPIREZ = Gamemode(
         7, "VAMPIREZ", "VampireZ"
     )
-    WALLS = gamemode(
+    WALLS = Gamemode(
         3, "WALLS", "Walls"
     )
-    WALLS3 = gamemode(
+    WALLS3 = Gamemode(
         13, "WALLS3", "Walls3", "Mega Walls"
     )
 
     @classmethod
     async def convert(cls, ctx, argument):
-        for gm in gamemodes:
+        for gm in Gamemodes:
             gm = gm.value
             if argument == gm.id:
                 return gm
@@ -125,13 +125,13 @@ class gamemodes(enum.Enum):
                 return gm
 
 
-class scope(enum.Enum):
+class Scope(enum.Enum):
     GLOBAL = "global"
     GUILD = "guild"
     USER = "user"
 
 
-class colortypes(enum.Enum):
+class ColorTypes(enum.Enum):
     HSB = "hsb"
     HSL = "hsl"
     HSV = "hsv"
@@ -144,27 +144,31 @@ class Rank:
             db_key: str,
             clear_name: str,
             color: str = None,
+            bracket_color: str = None,
+            plus_color: str = None,
     ):
         self.db_key = db_key
         self.clear_name = clear_name
         self.color = color
+        self.bracket_color = bracket_color
+        self.plus_color = plus_color
 
 
 class Ranks(enum.Enum):
-    DEFAULT = Rank("NORMAL", "")
-    VIP = Rank("VIP", "VIP")
-    VIP_PLUS = Rank("VIP_PLUS", "VIP+")
-    MVP = Rank("MVP", "MVP")
-    MVP_PLUS = Rank("MVP_PLUS", "MVP+")
-    SUPERSTAR = Rank("SUPERSTAR", "MVP++")
-    YOUTUBER = Rank("YOUTUBER", "YOUTUBE")
-    PIG = Rank("PIG+++", "PIG+++")
-    BUILD_TEAM = Rank("BUILD TEAM", "BUILD TEAM")
-    HELPER = Rank("HELPER", "HELPER")
-    MODERATOR = Rank("MODERATOR", "MOD")
-    ADMIN = Rank("ADMIN", "ADMIN")
-    SLOTH = Rank("SLOTH", "SLOTH")
-    OWNER = Rank("OWNER", "OWNER")
+    DEFAULT = Rank("NORMAL", "", color="#555555")
+    VIP = Rank("VIP", "VIP", color="#55FF55")
+    VIP_PLUS = Rank("VIP_PLUS", "VIP+", color="#55FF55", plus_color="#55FFFF")
+    MVP = Rank("MVP", "MVP", color="#55FFFF")
+    MVP_PLUS = Rank("MVP_PLUS", "MVP+", color="#55FFFF", plus_color="#AA0000")
+    SUPERSTAR = Rank("SUPERSTAR", "MVP++", color="#FFAA00", plus_color="#AA0000")
+    YOUTUBER = Rank("YOUTUBER", "YOUTUBE", color="#FFFFFF", bracket_color="#AA0000")
+    PIG = Rank("PIG+++", "PIG+++", color="#FF5SFF", plus_color="#55FFFF")
+    BUILD_TEAM = Rank("BUILD TEAM", "BUILD TEAM", color="#00AAAA")
+    HELPER = Rank("HELPER", "HELPER", color="#5555FF")
+    MODERATOR = Rank("MODERATOR", "MOD", color="#00AA00")
+    ADMIN = Rank("ADMIN", "ADMIN", color="#AA0000")
+    SLOTH = Rank("SLOTH", "SLOTH", color="#AA0000")
+    OWNER = Rank("OWNER", "OWNER", color="#AA0000")
 
     @classmethod
     async def convert(cls, ctx, argument):
