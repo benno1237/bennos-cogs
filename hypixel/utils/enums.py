@@ -1,4 +1,5 @@
 from redbot.core import commands
+from typing import Optional
 import enum
 
 class Gamemode:
@@ -112,17 +113,25 @@ class Gamemodes(enum.Enum):
     )
 
     @classmethod
-    async def convert(cls, ctx, argument):
+    async def convert(cls, ctx, argument) -> Optional[Gamemode]:
         for gm in Gamemodes:
             gm = gm.value
-            if argument == gm.id:
-                return gm
-            elif argument.lower() == gm.type_name.lower():
+            if argument.lower() == gm.type_name.lower():
                 return gm
             elif argument.lower() == gm.db_key.lower():
                 return gm
             elif argument.lower() == gm.clean_name.lower():
                 return gm
+            else:
+                try:
+                    val = int(argument)
+                    if val == gm.id:
+                        return gm
+                except ValueError:
+                    pass
+
+        await ctx.send_help()
+        raise commands.CheckFailure()
 
 
 class Scope(enum.Enum):
@@ -171,10 +180,29 @@ class Ranks(enum.Enum):
     OWNER = Rank("OWNER", "OWNER", color="#AA0000")
 
     @classmethod
-    async def convert(cls, ctx, argument):
-        for rank in Ranks:
-            if rank.value.db_key == argument:
-                return rank
+    def convert(cls, argument: dict):
+        if argument.get("rank", None):
+            for rank in Ranks:
+                if rank.value.db_key == argument.get("rank"):
+                    return rank
+
+        elif argument.get("monthlyPackageRank", None):
+            for rank in Ranks:
+                if rank.value.db_key == argument.get("monthlyPackageRank"):
+                    return rank
+
+        elif argument.get("newPackageRank", None):
+            for rank in Ranks:
+                if rank.value.db_key == argument.get("newPackageRank"):
+                    return rank
+
+        elif argument.get("packageRank", None):
+            for rank in Ranks:
+                if rank.value.db_key == argument.get("packageRank"):
+                    return rank
+
+        return Ranks.DEFAULT
+
 
 
 

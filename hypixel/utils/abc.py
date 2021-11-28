@@ -120,15 +120,15 @@ class MixinMeta(ABC):
 
     """Utils"""
     @abstractmethod
-    async def fetch_apikey(self, ctx: commands.Context) -> Optional[str]:
-        raise NotImplementedError()
-
-    @abstractmethod
     async def fetch_modules(self) -> None:
         raise NotImplementedError()
 
     @abstractmethod
     async def maybe_send_images(self, channel: discord.TextChannel, im: List[Image.Image]) -> List[discord.Message]:
+        raise NotImplementedError()
+
+    @abstractmethod
+    async def send_failed_for(self, ctx: commands.Context, users: List) -> None:
         raise NotImplementedError()
 
 

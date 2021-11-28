@@ -7,6 +7,7 @@ import MinePI
 import pathlib
 import random
 import re
+import tabulate
 
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageColor
@@ -89,6 +90,76 @@ async def fetch_apikey(ctx: commands.Context, config: Config) -> Tuple[Optional[
         return user_key, Scope.USER
 
 
+class ButtonConfirm(discord.ui.View):
+    def __init__(self, author_id: int):
+        self.author_id = author_id
+        self.confirm = False
+        super().__init__(timeout=30)
+
+    def stop(self):
+        for btn in self.children:
+            btn.disabled = True
+        super().stop()
+
+    @discord.ui.button(label="Yes", style=discord.ButtonStyle.green)
+    async def confirm(self, button: discord.ui.Button, interaction: discord.Interaction):
+        if self.author_id == interaction.user.id:
+            self.confirm = True
+            self.stop()
+        else:
+            await interaction.response.send_message("You do not have permissions to do that...", ephemeral=True)
+
+    @discord.ui.button(label="No", style=discord.ButtonStyle.red)
+    async def cancel(self, button: discord.ui.Button, interaction: discord.Interaction):
+        if self.author_id == interaction.user.id:
+            self.stop()
+        else:
+            await interaction.response.send_message("You do not have permissions to do that...", ephemeral=True)
+
+
+class SelectionRow(discord.ui.Select):
+    def __init__(self, modules: dict, author: discord.Member, config: Config, gm: Gamemode):
+        self.config = config
+        self.gamemode = gm
+        self.author = author
+        self.all_modules = modules
+        self.modules = modules[author.guild.id][str(gm)]
+
+        options = []
+        for module in self.modules:
+            options.append(discord.SelectOption(label=module.name, description=module.db_key))
+
+        super().__init__(
+            placeholder="Select the modules in the order you want...",
+            options=options,
+            min_values=len(self.modules),
+            max_values=len(self.modules)
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user == self.author:
+            new_modules = []
+            names = [module.name for module in self.modules]
+            for v in self.values:
+                idx = names.index(v)
+                new_modules.append(self.modules[idx])
+
+            self.all_modules[interaction.guild.id][str(self.gamemode)] = new_modules
+            new_modules = [(module.db_key, module.name) for module in self.modules]
+
+            await self.config.guild(interaction.guild).set_raw(
+                str(self.gamemode), "current_modules", value=new_modules
+            )
+
+            await interaction.response.send_message("Order changed.")
+            self.view.stop()
+        else:
+            await interaction.response.send_message(
+                "Only the author of the original message can interact with this component.",
+                ephemeral=True
+            )
+
+
 class Module:
     """Class representing a single module"""
     all_modules: Optional[dict] = None
@@ -132,7 +203,7 @@ class Module:
             return
 
         if not self.is_custom:
-            return stats.get(self._db_key)
+            return stats.get(self._db_key, 0)
 
         try:
             calc = re.sub("{}", f"{stats=}".split("=")[0], self._calc)
@@ -270,13 +341,18 @@ class Player:
 
     def stats(self, gm: Gamemode):
         """Returns the player's stats for the given gamemode"""
-        return self._resp["stats"].get(gm.db_key, None)
+        return self._resp["stats"].get(gm.db_key, {})
 
     async def initialize(self):
         await self.get_uuid()
+        if not self.valid:
+            self._player_ready.set()
+            return
+
         self._apikey, self._apikey_scope = await fetch_apikey(self._ctx, Player.config)
 
         if not self._apikey:
+            self._player_ready.set()
             return
 
         await self.fetch_stats()
@@ -287,9 +363,9 @@ class Player:
         if isinstance(self._user_identifier, discord.Member) or len(self._user_identifier) == 18:
             try:
                 member_obj = await commands.MemberConverter().convert(self._ctx, str(self._user_identifier))
+                self._user = member_obj
                 uuid = await Player.config.user(member_obj).uuid()
                 if uuid:
-                    self._user = member_obj
                     self._uuid = uuid
                     return
 
@@ -340,29 +416,7 @@ class Player:
         else:
             self._color = await Player.config.header_color()
 
-        package_rank = self._resp.get("rank")
-        rank = self._resp.get("prefix")
-        prefix_raw = self._resp.get("monthlyPackageRank")
-        monthly_package_rank = self._resp.get("newPackageRank")
-        new_package_rank = self._resp.get("packageRank")
-
-        real_rank = None
-
-        if rank and rank != "NORMAL" and not real_rank:
-            real_rank = await Ranks.convert(None, rank)
-
-        elif (monthly_package_rank and monthly_package_rank != "NONE") and not real_rank:
-            real_rank = await Ranks.convert(None, monthly_package_rank)
-
-        elif new_package_rank and not real_rank:
-            real_rank = await Ranks.convert(None, new_package_rank)
-
-        elif package_rank and not real_rank:
-            real_rank = await Ranks.convert(None, package_rank)
-
-        if not real_rank:
-            real_rank = Ranks.DEFAULT
-        self._rank = real_rank
+        self._rank = Ranks.convert(self._resp)
 
 
 class Autostats:
@@ -440,44 +494,6 @@ class Autostats:
         del self
 
 
-class SelectionRow(discord.ui.Select):
-    def __init__(self, current_modules: list, author: discord.Member, config: Config, gm: Gamemode):
-        self.config = config
-        self.gamemode = gm
-        self.author = author
-        self.current_modules = current_modules
-
-        options = []
-        for i in current_modules:
-            options.append(discord.SelectOption(label=i[0], description=i[1]))
-
-        super().__init__(
-            placeholder="Select the modules in the order you want...",
-            options=options,
-            min_values=len(current_modules),
-            max_values=len(current_modules)
-        )
-
-    async def callback(self, interaction: discord.Interaction):
-        if interaction.user == self.author:
-            modules_raw = self.values
-            new_modules = []
-            db_keys = [x[0] for x in self.current_modules]
-
-            for module in modules_raw:
-                idx = db_keys.index(module)
-                new_modules.append(self.current_modules[idx])
-
-            await self.config.guild(interaction.guild).set_raw(str(self.gamemode), "current_modules", value=new_modules)
-            await interaction.response.send_message("Order changed.")
-            self.view.stop()
-        else:
-            await interaction.response.send_message(
-                "Only the author of the original message can interact with this component.",
-                ephemeral=True
-            )
-
-
 class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
     def __init__(self, bot):
         self.bot = bot
@@ -543,6 +559,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
         bot.loop.create_task(self.initialize())
 
     async def initialize(self):
+        self.cog_ready_event.clear()
         Module.all_modules = await self.fetch_modules()
 
         async for guild in AsyncIter(self.bot.guilds):
@@ -558,6 +575,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
                         self.modules[guild.id][str(gm.value)].append(
                             Module(
                                 name=name,
+                                db_key=db_key,
                                 calc=custom_modules[db_key],
                                 gm=gm.value,
                             )
@@ -675,20 +693,39 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
         """Add a module for the given gamemode"""
         guild_data = await self.config.guild(ctx.guild).get_raw(str(gm))
 
-        current_modules = guild_data["current_modules"]
         custom_modules = guild_data["custom_modules"]
 
-        if db_key in Module.all_modules[gm.db_key] or db_key in custom_modules.keys():
-            if db_key in [x[0] for x in current_modules]:
-                await ctx.send(f"This module is already added.")
-                return
+        modules = self.modules[ctx.guild.id][str(gm)]
+        if not (db_key in Module.all_modules[str(gm)] or db_key in custom_modules.keys()):
+            await ctx.send(f"The given database key (`{db_key}`) doesn't seem to be a "
+                           f"valid default nor custom one. You can list all available ones by typing "
+                           f"`{ctx.clean_prefix}hypixelset modules list {gm.db_key}` first.")
+            return
 
-            current_modules.append((db_key, clear_name))
-            await self.config.guild(ctx.guild).set_raw(str(gm), "current_modules", value=current_modules)
-            await ctx.send(f"Module `{db_key}` added as `{clear_name}`")
-        else:
-            await ctx.send(f"Module `{db_key}` doesn't seem to be valid.\n"
-                           f"Use `{ctx.clean_prefix}hypixelset modules list {gm.db_key}` to retrieve a list of supported ones")
+        if db_key in [module.db_key for module in modules]:
+            await ctx.send(f"The given database key (`{db_key}`) is already added. Remove it by typing "
+                           f"`{ctx.clean_prefix}hypixelset modules remove {db_key}` first.")
+            return
+
+        if clear_name in [module.name for module in modules]:
+            await ctx.send(f"The given module name (`{clear_name}`) is already added. Remove it by typing "
+                           f"`{ctx.clean_prefix}hypixelset modules remove {clear_name}` first.")
+            return
+
+        self.modules[ctx.guild.id][str(gm)].append(
+            Module(
+                name=clear_name,
+                db_key=db_key,
+                calc=custom_modules[db_key] if db_key in custom_modules.keys() else None,
+                gm=gm,
+            )
+        )
+        guild_data["current_modules"].append((db_key, clear_name))
+        await self.config.guild(ctx.guild).set_raw(
+            str(gm), "current_modules", value=guild_data["current_modules"]
+        )
+
+        await ctx.tick()
 
     @command_hypixelset_modules.command(name="remove")
     async def command_hypixelset_modules_remove(self, ctx: commands.Context, gm: Gamemodes, db_key: str = None, *, clear_name: str = None) -> None:
@@ -698,41 +735,34 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
             return
 
         current_modules = await self.config.guild(ctx.guild).get_raw(str(gm), "current_modules")
-        db_keys = [x[0] for x in current_modules]
-        clear_names = [x[1] for x in current_modules]
+        modules = self.modules[ctx.guild.id][str(gm)]
 
-        if db_key in db_keys:
-            idx = db_keys.index(db_key)
-            db_keys.pop(idx)
-            clear_names.pop(idx)
-
-        if clear_name in clear_names:
-            idx = clear_names.index(clear_name)
-            clear_names.pop(idx)
-            db_keys.pop(idx)
-
-        if len(db_keys) != len(current_modules):
-            current_modules = [(x, clear_names[idx]) for idx, x in enumerate(db_keys)]
-            await self.config.guild(ctx.guild).set_raw(str(gm), "current_modules", value=current_modules)
-            await ctx.tick()
+        for idx, module in enumerate(modules):
+            if db_key == module.db_key or clear_name == module.name:
+                self.modules[ctx.guild.id][str(gm)].pop(idx)
+                current_modules.pop(idx)
+                await self.config.guild(ctx.guild).set_raw(
+                    str(gm), "current_modules", value=current_modules
+                )
+                await ctx.tick()
+                return
         else:
-            await ctx.send("No matching module found to remove")
+            await ctx.send("No matching module found. You can list all modules by typing "
+                           f"`{ctx.clean_prefix}hypixelset modules list {gm.db_key}`")
 
     @command_hypixelset_modules.command(name="reorder")
-    async def command_hypixelset_modules_reorder(self, ctx: commands.Context, gm: Gamemodes) -> None:
-        current_modules = await self.config.guild(ctx.guild).get_raw(str(gm), "current_modules")
-
+    async def command_hypixelset_modules_reorder(self, ctx: commands.Context, *, gm: Gamemodes) -> None:
         view = discord.ui.View()
-        view.add_item(SelectionRow(current_modules, ctx.author, self.config, gm))
+        view.add_item(SelectionRow(self.modules, ctx.author, self.config, gm))
 
         await ctx.send("Select the modules in your preferred order: ", view=view)
 
     @command_hypixelset_modules.command(name="list")
-    async def command_hypixelset_modules_list(self, ctx: commands.Context, gm: Gamemode) -> None:
+    async def command_hypixelset_modules_list(self, ctx: commands.Context, *, gm: Gamemodes) -> None:
         """List all modules of a gamemode"""
         custom_modules = await self.config.guild(ctx.guild).get_raw(str(gm), "custom_modules")
 
-        modules_gamemode = Module.all_modules[gm.db_key] + [x[0] for x in custom_modules]
+        modules_gamemode = Module.all_modules[gm.db_key] + list(custom_modules.keys())
         modules_gamemode = "\n".join(list(map(str, modules_gamemode)))
 
         await ctx.send(file=discord.File(BytesIO(modules_gamemode.encode()), "modules.txt"))
@@ -740,10 +770,36 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
     @commands.guild_only()
     @command_hypixelset.command(name="username", aliases=["name"])
     async def command_hypixelset_username(self, ctx: commands.Context, username: str) -> None:
-        resp, status = await request_mojang(username, session=self.session)
-        if status == 200 and resp.get("id", None):
-            await self.config.user(ctx.author).uuid.set(resp["id"])
-            await ctx.tick()
+        async with ctx.typing():
+            resp, status = await request_mojang(username, session=self.session)
+            if status == 200 and resp.get("id", None):
+                embed = discord.Embed(
+                    color=await ctx.embed_color(), title="Is that you?"
+                )
+                skin = await MinePI.render_3d_skin(resp["id"], ratio=8)
+                embed.set_author(name=ctx.author.name, icon_url=ctx.author.display_avatar)
+                embed.add_field(name="Name", value=username, inline=False)
+                embed.add_field(name="UUID", value=resp["id"], inline=False)
+                embed.set_footer(text="Hypixel stats bot")
+                embed.set_thumbnail(url=f"attachment://skin_{ctx.author.name}.png")
+
+                with BytesIO() as imb:
+                    skin.save(imb, "PNG")
+                    imb.seek(0)
+                    file = discord.File(imb, f"skin_{ctx.author.name}.png")
+
+                view = ButtonConfirm(ctx.author.id)
+
+                await ctx.send(embed=embed, file=file, view=view)
+
+                await view.wait()
+                if view.confirm:
+                    await self.config.user(ctx.author).uuid.set(resp["id"])
+                    await ctx.tick()
+                else:
+                    await ctx.send("Cancelled")
+            else:
+                await ctx.send("The given username doesn't seem to be valid.")
 
     @commands.guild_only()
     @commands.command(name="stats")
@@ -760,9 +816,18 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
                 ))
 
             await asyncio.gather(*[user.wait_for_fully_constructed() for user in users])
-            im_list = await asyncio.gather(*[self.create_stats_img(user, gm) for user in users])
+            im_list = []
+            failed = []
+            for user in users:
+                if not user.valid:
+                    failed.append(user)
+                else:
+                    im_list.append(await self.create_stats_img(user, gm))
 
             await self.maybe_send_images(ctx.channel, im_list)
+
+        if failed:
+            await self.send_failed_for(ctx, failed)
 
     @commands.command(name="tstats")
     async def command_tstats(self, ctx, user: str = None):
@@ -800,6 +865,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
                 modules.append(
                     Module(
                         module[1],
+                        module[0],
                         calc=custom_modules[module[0]],
                         gm=Gamemodes.BEDWARS.value,
                     )
@@ -1090,7 +1156,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
                 if compare_stats:
                     compare_value, compare_color = self.get_compare_value_and_color(
                         module,
-                        player,
+                        module.get_value(player),
                         compare_stats,
                     )
 
@@ -1124,20 +1190,20 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
     def get_compare_value_and_color(
             self,
             module: Module,
-            original_val: Optional[Union[int, float, str]],
+            new_val: Optional[Union[int, float, str]],
             c_stats: dict
     ) -> Tuple[Any, Optional[Tuple]]:
         try:
-            float(original_val)
+            float(new_val)
         except ValueError:
-            return original_val, None
+            return new_val, None
 
         green = (0, 255, 0)
         red = (255, 0, 0)
         negative_list = [
             "loss"
         ]
-        compare = module.get_value(c_stats) - original_val
+        compare = new_val - module.get_value(stats=c_stats)
         compare = int(compare) if compare % 1 == 0 else round(compare, 2)
 
         if compare == 0:
@@ -1145,13 +1211,13 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
 
         elif compare < 0:
             for i in negative_list:
-                if module.db_key in i:
+                if (module.db_key if not module.is_custom else module.name) in i:
                     return str(compare), green
             return str(compare), red
 
         else:
             for i in negative_list:
-                if module.db_key in i:
+                if (module.db_key if not module.is_custom else module.name) in i:
                     return str(compare), red
             return str(compare), green
 
@@ -1211,15 +1277,6 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
         return im
 
     """Utility functions"""
-    async def fetch_apikey(self, ctx: commands.Context) -> Tuple[Optional[str], Scope]:
-        """Guild/User based apikey lookup"""
-        user_key = await self.config.user(ctx.author).apikey()
-        if not user_key and ctx.guild:
-            guild_key = await self.config.guild(ctx.guild).apikey()
-            return guild_key, Scope.GLOBAL
-        else:
-            return user_key, Scope.USER
-
     async def fetch_modules(self) -> None:
         """Fetch all available hypixel modules"""
         headers = {
@@ -1270,4 +1327,27 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
                 )
 
         return messages
+
+    async def send_failed_for(self, ctx: commands.Context, users: List):
+        if len(users) == 1:
+            if users[0]._user:
+                msg = (f"Fetching stats for `{users[0]._user.name}` failed. Looks like the given discord user doesn't "
+                       f"have a minecraft name set yet. Tell them do to so by running "
+                       f"`{ctx.clean_prefix}hypixelset username`.")
+            else:
+                msg = (f"Fetching stats for `{users[0]._user_identifier}` failed. Check the given minecraft username "
+                       f"for typos.")
+        else:
+            msg = "Fetching stats for the following users failed: \n"
+
+            failed = []
+            for user in users:
+                if user._user:
+                    failed.append([user._user.name, "No MC name set"])
+                else:
+                    failed.append([user._user_identifier, "Invalid MC name"])
+
+            msg += f"```md\n{tabulate.tabulate(failed, ['user', 'reason'])}\n```"
+
+        await ctx.send(msg)
 

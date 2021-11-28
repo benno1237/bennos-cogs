@@ -10,7 +10,9 @@
 		"Hypixel"
 	],
 	"requirements": [
-		"requests"
+		"MinePI",
+		"tabulate",
+		"pillow"
 	],
 	"type": "COG",
 	"end_user_data_statement": "This cog does not persistently store data or metadata about users."
