@@ -9,13 +9,15 @@ class Gamemode:
             type_name: str,
             db_key: str,
             clean_name: str = None,
-            xp_key: str = None
+            xp_key: str = None,
+            autostats_key: str = None,
     ):
         self._id = id
         self._type_name = type_name
         self._db_key = db_key
         self._clean_name = clean_name if clean_name else db_key
         self._xp_key = xp_key
+        self._autostats_key = autostats_key
 
     def __str__(self):
         return self.db_key
@@ -43,6 +45,10 @@ class Gamemode:
     def xp_key(self):
         return self._xp_key
 
+    @property
+    def autostats_key(self):
+        return self._autostats_key
+
 
 class Gamemodes(enum.Enum):
     ARCADE = Gamemode(
@@ -55,7 +61,7 @@ class Gamemodes(enum.Enum):
         23, "BATTLEGROUND", "Battleground", "Warlords"
     )
     BEDWARS = Gamemode(
-        58, "BEDWARS", "Bedwars", "Bed Wars", "Experience"
+        58, "BEDWARS", "Bedwars", "Bed Wars", "Experience", autostats_key="games_played_bedwars"
     )
     BUILD_BATTLE = Gamemode(
         60, "BUILD_BATTLE", "BuildBattle", "Build Battle"
@@ -82,7 +88,7 @@ class Gamemodes(enum.Enum):
         2, "QUAKECRAFT", "Quake"
     )
     SKYWARS = Gamemode(
-        51, "SKYWARS", "SkyWars", "SkyWars", "skywars_experience"
+        51, "SKYWARS", "SkyWars", "SkyWars", "skywars_experience", autostats_key="games_played_skywars"
     )
     SKYCLASH = Gamemode(
         55, "SKYCLASH", "SkyClash"

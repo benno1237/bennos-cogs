@@ -7,6 +7,7 @@ import MinePI
 import pathlib
 import random
 import re
+import time
 import tabulate
 
 from io import BytesIO
@@ -23,71 +24,6 @@ from .utils.enums import Gamemode, Gamemodes, Scope, ColorTypes, Ranks, Rank
 
 INVALID_API_KEY: Final = "Invalid API key"
 USER_AGENT: Final = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/93.0.4577.82 Safari/537.36"
-
-"""Api requests"""
-async def request_hypixel(
-        session: aiohttp.ClientSession,
-        apikey: str,
-        ctx: commands.Context = None,
-        uuid: str = None,
-        topic: str = "player",
-) -> Tuple[Optional[dict], Optional[int]]:
-    url = f"https://api.hypixel.net/{topic}"
-
-    if uuid:
-        url += f"?uuid={uuid}"
-
-    headers = {
-        "API-Key": apikey,
-        "User-Agent": USER_AGENT
-    }
-
-    async with session.get(url=url, headers=headers) as resp:
-        try:
-            resp_dict = json.loads(await resp.text())
-
-            return resp_dict, resp.status
-        except json.JSONDecodeError:
-            # invalid response?
-            print(resp.status)
-            return None, resp.status
-        except AttributeError:
-            # api down again?
-            return None, resp.status
-        except asyncio.TimeoutError:
-            # api down again?
-            return None, None
-
-
-async def request_mojang(
-        mc_name: str,
-        session: aiohttp.ClientSession,
-) -> Tuple[Optional[dict], Optional[int]]:
-    url = f"https://api.mojang.com/users/profiles/minecraft/{mc_name}"
-
-    headers = {
-        "User-Agent": USER_AGENT
-    }
-    async with session.get(url=url, headers=headers) as resp:
-        try:
-            resp_dict = json.loads(await resp.text())
-            return resp_dict, resp.status
-        except json.JSONDecodeError:
-            # invalid response?
-            return None, resp.status
-        except asyncio.TimeoutError:
-            # api down again?
-            return None, None
-
-
-async def fetch_apikey(ctx: commands.Context, config: Config) -> Tuple[Optional[str], Scope]:
-    """Guild/User based apikey lookup"""
-    user_key = await config.user(ctx.author).apikey()
-    if not user_key and ctx.guild:
-        guild_key = await config.guild(ctx.guild).apikey()
-        return guild_key, Scope.GLOBAL
-    else:
-        return user_key, Scope.USER
 
 
 class ButtonConfirm(discord.ui.View):
@@ -240,6 +176,70 @@ class Player:
 
         ctx.bot.loop.create_task(self.initialize())
 
+    @classmethod
+    async def request_hypixel(
+            cls,
+            apikey: str,
+            uuid: str = None,
+            topic: str = "player",
+    ) -> Tuple[Optional[dict], Optional[int]]:
+        url = f"https://api.hypixel.net/{topic}"
+
+        if uuid:
+            url += f"?uuid={uuid}"
+
+        headers = {
+            "API-Key": apikey,
+            "User-Agent": USER_AGENT
+        }
+
+        async with cls.session.get(url=url, headers=headers) as resp:
+            try:
+                resp_dict = json.loads(await resp.text())
+
+                return resp_dict, resp.status
+            except json.JSONDecodeError:
+                # invalid response?
+                print(resp.status)
+                return None, resp.status
+            except AttributeError:
+                # api down again?
+                return None, resp.status
+            except asyncio.TimeoutError:
+                # api down again?
+                return None, None
+
+    @classmethod
+    async def request_mojang(
+            cls,
+            mc_name: str,
+    ) -> Tuple[Optional[dict], Optional[int]]:
+        url = f"https://api.mojang.com/users/profiles/minecraft/{mc_name}"
+
+        headers = {
+            "User-Agent": USER_AGENT
+        }
+        async with cls.session.get(url=url, headers=headers) as resp:
+            try:
+                resp_dict = json.loads(await resp.text())
+                return resp_dict, resp.status
+            except json.JSONDecodeError:
+                # invalid response?
+                return None, resp.status
+            except asyncio.TimeoutError:
+                # api down again?
+                return None, None
+
+    @classmethod
+    async def fetch_apikey(cls, ctx: commands.Context) -> Tuple[Optional[str], Scope]:
+        """Guild/User based apikey lookup"""
+        user_key = await Player.config.user(ctx.author).apikey()
+        if not user_key and ctx.guild:
+            guild_key = await Player.config.guild(ctx.guild).apikey()
+            return guild_key, Scope.GLOBAL
+        else:
+            return user_key, Scope.USER
+
     @property
     def rank(self):
         """Returns the player's Hypixel rank"""
@@ -349,7 +349,7 @@ class Player:
             self._player_ready.set()
             return
 
-        self._apikey, self._apikey_scope = await fetch_apikey(self._ctx, Player.config)
+        self._apikey, self._apikey_scope = await self.fetch_apikey(self._ctx)
 
         if not self._apikey:
             self._player_ready.set()
@@ -375,7 +375,7 @@ class Player:
         else:
             # no MemberObject or ID was passed or the given user has no uuid set
             # trying a request to mojang servers
-            resp, status = await request_mojang(self._user_identifier, Player.session)
+            resp, status = await Player.request_mojang(self._user_identifier)
 
             if status == 200 and resp.get("id", None):
                 # request successful, using the uuid returned
@@ -398,8 +398,7 @@ class Player:
         if not self._uuid:
             return
 
-        resp, status = await request_hypixel(
-            session=Player.session,
+        resp, status = await Player.request_hypixel(
             apikey=self._apikey,
             uuid=self._uuid,
         )
@@ -425,29 +424,43 @@ class Autostats:
                  channel: discord.TextChannel,
                  gm: Gamemodes,
                  users: list,
-                ):
+                 ):
         self.channel: discord.TextChannel = channel
         self.gamemode: Gamemodes = gm
         self.users = users
         self.cog: Hypixel = cog
         self.messages: list = []
 
-        self.task: asyncio.Task
+        self.last_updated: Optional[int] = None
+        self.task: Optional[asyncio.Task] = None
+
+    @staticmethod
+    def _exception_catching_callback(task: asyncio.Task):
+        if task.exception():
+            task.result()
 
     async def is_updated(self):
         user = self.users[0]
         prev = user.stats(self.gamemode)
         await user.fetch_stats()
-        if user.stats(self.gamemode)["games_played_bedwars"] != prev["games_played_bedwars"]:
+        if user.stats(self.gamemode)[self.gamemode.autostats_key] != prev[self.gamemode.autostats_key]:
             return True
 
+        return False
+
+    def timeout(self):
+        if time.time() > self.last_updated + 3600:
+            return True
         return False
 
     async def main(self):
         try:
             while not self.task.cancelled():
                 first_previous = self.users[0].stats(self.gamemode)
+                if self.timeout():
+                    await self.cancel()
                 if await self.is_updated():
+                    self.last_updated = int(time.time())
                     await self.maybe_delete_old_messages()
                     im_list = []
 
@@ -474,19 +487,14 @@ class Autostats:
         except (discord.Forbidden, discord.NotFound):
             pass
 
-    @staticmethod
-    def _exception_catching_callback(task: asyncio.Task):
-        if task.exception():
-            task.result()
-
     async def start(self):
-        if self.users:
-            im_list = await asyncio.gather(*[self.cog.create_stats_img(user, self.gamemode) for user in self.users])
+        self.last_updated = int(time.time())
+        im_list = await asyncio.gather(*[self.cog.create_stats_img(user, self.gamemode) for user in self.users])
 
-            self.messages = await self.cog.maybe_send_images(self.channel, im_list)
+        self.messages = await self.cog.maybe_send_images(self.channel, im_list)
 
-            self.task = asyncio.create_task(self.main())
-            self.task.add_done_callback(self._exception_catching_callback)
+        self.task = asyncio.create_task(self.main())
+        self.task.add_done_callback(self._exception_catching_callback)
 
     async def cancel(self):
         await self.maybe_delete_old_messages()
@@ -596,11 +604,16 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
     @commands.group(name="autostats", invoke_without_command=True)
     async def command_autostats(self, ctx: commands.Context, gm: Gamemodes, *usernames: str) -> None:
         """Base command for autostats processes"""
+        if gm not in [gm.value for gm in Gamemodes if gm.value.autostats_key]:
+            await ctx.send("The given gamemode currently isn't supported for autostats")
+            return
+
         async with ctx.typing():
+            usernames = usernames if usernames else [ctx.author]
             users = [Player(ctx, user_identifier) for user_identifier in usernames]
             await asyncio.gather(*[user.wait_for_fully_constructed() for user in users])
 
-            _, key_scope = await fetch_apikey(ctx, config=self.config)
+            _, key_scope = await Player.fetch_apikey(ctx)
 
             if key_scope == Scope.GUILD:
                 if len(self.autostats_tasks[key_scope.value]) >= 5:
@@ -608,15 +621,22 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
                                    f"Set your own apikey using `{ctx.clean_prefix}hypixelset apikey`")
                     return
 
-            autostats_task = Autostats(
-                self,
-                ctx.channel,
-                gm,
-                users,
-            )
+            if all([user.valid for user in users]):
+                autostats_task = Autostats(
+                    self,
+                    ctx.channel,
+                    gm,
+                    users,
+                )
 
-            self.autostats_tasks[key_scope.value][ctx.author.id] = autostats_task
-            await autostats_task.start()
+                self.autostats_tasks[key_scope.value][ctx.author.id] = autostats_task
+                await autostats_task.start()
+            else:
+                failed = []
+                for user in users:
+                    if not user.valid:
+                        failed.append(user)
+                await self.send_failed_for(ctx, failed)
 
     @command_autostats.group(name="stop", invoke_without_command=True)
     async def command_autostats_stop(self, ctx: commands.Context) -> None:
@@ -654,7 +674,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
     @commands.dm_only()
     @command_hypixelset.command(name="apikey")
     async def command_hypixelset_apikey(self, ctx: commands.Context, apikey: str, guild: discord.Guild = None) -> None:
-        resp, status = await request_hypixel(ctx=ctx, topic="key", apikey=apikey, session=self.session)
+        resp, status = await Player.request_hypixel(ctx=ctx, topic="key", apikey=apikey)
 
         if status == 200 and resp:
             if not guild:
@@ -771,7 +791,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
     @command_hypixelset.command(name="username", aliases=["name"])
     async def command_hypixelset_username(self, ctx: commands.Context, username: str) -> None:
         async with ctx.typing():
-            resp, status = await request_mojang(username, session=self.session)
+            resp, status = await Player.request_mojang(username)
             if status == 200 and resp.get("id", None):
                 embed = discord.Embed(
                     color=await ctx.embed_color(), title="Is that you?"
