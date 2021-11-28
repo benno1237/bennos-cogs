@@ -49,10 +49,6 @@ class MixinMeta(ABC):
         raise NotImplementedError()
 
     @abstractmethod
-    async def command_hypixelset_color(self, ctx: commands.Context, color: str) -> None:
-        raise NotImplementedError()
-
-    @abstractmethod
     async def command_hypixelset_modules(self, ctx: commands.Context) -> None:
         raise NotImplementedError()
 
@@ -92,10 +88,6 @@ class MixinMeta(ABC):
 
 
     """Image gen"""
-    @abstractmethod
-    async def create_stats_img_new(self, player: Any, gm: Gamemode, modules: list) -> Image.Image:
-        raise NotImplementedError()
-
     @abstractmethod
     async def create_stats_img(self, player: Any, gm: Gamemode, compare_stats: list = None) -> Image.Image:
         raise NotImplementedError()

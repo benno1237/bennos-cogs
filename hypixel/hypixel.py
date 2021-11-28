@@ -603,7 +603,20 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
     @commands.guild_only()
     @commands.group(name="autostats", invoke_without_command=True)
     async def command_autostats(self, ctx: commands.Context, gm: Gamemodes, *usernames: str) -> None:
-        """Base command for autostats processes"""
+        """Automatically sends your stats
+
+        Automatically updates the stats image sent to discord after each round
+        This is still a heavy WIP. Since hypixel only updates their api as soon
+        as a game ends, stats can sometimes be messed up
+
+        **Args**:
+            **gm**: The gamemode you want to get stats for
+            **usernames**: a single or multiple discord Members or minecraft names
+
+        Example use:
+            `[p]autostats bedwars`
+            `[p]autostats bedwars Technoblade sucr_kolli`
+        """
         if gm not in [gm.value for gm in Gamemodes if gm.value.autostats_key]:
             await ctx.send("The given gamemode currently isn't supported for autostats")
             return
@@ -640,7 +653,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
 
     @command_autostats.group(name="stop", invoke_without_command=True)
     async def command_autostats_stop(self, ctx: commands.Context) -> None:
-        """Stop you current autostats process"""
+        """Stops your current autostats process"""
         for s in Scope:
             if ctx.author.id in self.autostats_tasks[s.value].keys():
                 await self.autostats_tasks[s.value][ctx.author.id].cancel()
@@ -652,7 +665,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
 
     @command_autostats_stop.command(name="all")
     async def command_autostats_stop_all(self, ctx: commands.Context, stop_scope: Scope = True) -> None:
-        """Stop all autostats processes"""
+        """Stops all autostats processes"""
         if self.bot.is_owner(ctx.author) or ctx.guild.owner == ctx.author:
             if stop_scope == Scope.GUILD:
                 for task in self.autostats_tasks[stop_scope.value].values():
@@ -669,37 +682,48 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
 
     @commands.group(name="hypixelset")
     async def command_hypixelset(self, ctx: commands.Context) -> None:
+        """Base command for cog settings"""
         pass
 
     @commands.dm_only()
     @command_hypixelset.command(name="apikey")
-    async def command_hypixelset_apikey(self, ctx: commands.Context, apikey: str, guild: discord.Guild = None) -> None:
+    async def command_hypixelset_apikey(self, ctx: commands.Context, apikey: str, *, guild: discord.Guild = None) -> None:
+        """Api key management for the hypixel api
+
+        Keys are managed server wide and on a user basis
+        If `guild` is given, the key is set for the whole guild
+        else the key is treated as a personal one and only used for you
+
+        Api keys can be obtained by typing `/api` on the hypixel minecraft server
+
+        **Arguments**:
+            **apikey**: your hypixel api key
+            **guild**: guild to set the apikey for
+
+        Example use:
+            `[p]hypixelset apikey <your_key>`
+            `[p]hypixelset apikey <your_key> 133049272517001216`
+        """
         resp, status = await Player.request_hypixel(ctx=ctx, topic="key", apikey=apikey)
 
         if status == 200 and resp:
             if not guild:
                 await self.config.user(ctx.author).apikey.set(apikey)
+                await ctx.tick()
             else:
-                await self.config.guild(guild).apikey.set(apikey)
-
-            await ctx.tick()
+                member = guild.get_member(ctx.author)
+                if member:
+                    if member.guild_permissions.manage_guild:
+                        await self.config.guild(guild).apikey.set(apikey)
+                        await ctx.tick()
+                    else:
+                        await ctx.send("Sorry, looks like you do not have proper permissions to set an apikey "
+                                       f"for the guild {guild.name}. Ask a server moderator to do so.")
+                else:
+                    await ctx.send(f"You do not appear to be a member of {guild.name}")
 
         elif status == 403 and resp["cause"] == INVALID_API_KEY:
             await ctx.send("This apikey doesn't seem to be valid!")
-
-    @command_hypixelset.command(name="color", aliases=["colour"])
-    async def command_hypixelset_color(self, ctx: commands.Context, color: str, ctype: ColorTypes = None) -> None:
-        """Custom header color"""
-        try:
-            if ctype:
-                color = ImageColor.getrgb(f"{ctype.value}{color}")
-            else:
-                color = ImageColor.getrgb(color)
-        except ValueError:
-            await ctx.send("Color couldn't be found")
-            return
-
-        await self.config.user(ctx.author).header_color.set(list(color))
 
     @commands.guild_only()
     @commands.guildowner_or_permissions(administrator=True, manage_guild=True)
@@ -772,6 +796,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
 
     @command_hypixelset_modules.command(name="reorder")
     async def command_hypixelset_modules_reorder(self, ctx: commands.Context, *, gm: Gamemodes) -> None:
+        """Reorder modules"""
         view = discord.ui.View()
         view.add_item(SelectionRow(self.modules, ctx.author, self.config, gm))
 
@@ -790,6 +815,25 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
     @commands.guild_only()
     @command_hypixelset.command(name="username", aliases=["name"])
     async def command_hypixelset_username(self, ctx: commands.Context, username: str) -> None:
+        """Bind your minecraft account to your discord account
+
+        Why this is useful? You UUID is stored. Thus people can mention you
+        to see your stats. Passing discord members instead of minecraft usernames
+        spares one request and thus speeds all other commands up
+
+        **Args**:
+            **username**: Your minecraft username
+
+        Example Use:
+            `[p]hypixelset username sucr_kolli`
+
+        Example how it can be used afterwards:
+            Bedwars stats without specifying a username:
+            `[p]stats bedwars`
+            Bedwars stats for Benno if he bound an MC account already:
+            `[p]stats bedwars @Benno`
+        """
+
         async with ctx.typing():
             resp, status = await Player.request_mojang(username)
             if status == 200 and resp.get("id", None):
@@ -824,6 +868,18 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
     @commands.guild_only()
     @commands.command(name="stats")
     async def command_stats(self, ctx, gm: Gamemodes, *usernames: str) -> None:
+        """Stats for the given gamemode
+
+        Get a players stats for a hypixel gamemode
+
+        **Args**:
+            **gm**: The gamemode you want to get stats for
+            **usernames**: a single or multiple discord Members or minecraft names
+
+        Example use:
+            `[p]stats bedwars`
+            `[p]stats bedwars Technoblade sucr_kolli`
+        """
         if not usernames:
             usernames = [ctx.author]
 
@@ -849,66 +905,6 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
         if failed:
             await self.send_failed_for(ctx, failed)
 
-    @commands.command(name="tstats")
-    async def command_tstats(self, ctx, user: str = None):
-        active_modules = [
-            ("wins_bedwars", "Wins"),
-            ("kills_bedwars", "Kills"),
-            ("final_kills_bedwars", "Final Kills"),
-            ("beds_broken_bedwars", "Beds Broken"),
-            ("kills_per_game", "Kills/Game"),
-            ("losses_bedwars", "Losses"),
-            ("deaths_bedwars", "Deaths"),
-            ("final_deaths_bedwars", "Final Deaths"),
-            ("beds_lost_bedwars", "Beds Lost"),
-            ("final_kills_per_game", "Finals/Game"),
-            ("win_loose_rate", "WLR"),
-            ("kill_death_rate", "KDR"),
-            ("final_kill_death_rate", "FKDR"),
-            ("beds_destroyed_lost_rate", "BDLR"),
-            ("beds_per_game", "Beds/Game"),
-        ]
-
-        custom_modules = {
-            "kills_per_game": "round({}['kills_bedwars'] / {}['games_played_bedwars'], 2)",
-            "final_kills_per_game": "round({}['final_kills_bedwars'] / {}['games_played_bedwars'], 2)",
-            "win_loose_rate": "round({}['games_played_bedwars'] / {}['wins_bedwars'], 2)",
-            "kill_death_rate": "round({}['kills_bedwars'] / {}['deaths_bedwars'], 2)",
-            "final_kill_death_rate": "round({}['final_kills_bedwars'] / {}['final_deaths_bedwars'], 2)",
-            "beds_destroyed_lost_rate": "round({}['beds_broken_bedwars'] / {}['beds_lost_bedwars'], 2)",
-            "beds_per_game": "round({}['beds_broken_bedwars'] / {}['games_played_bedwars'], 2)",
-        }
-
-        modules = []
-        for module in active_modules:
-            if module[0] in custom_modules.keys():
-                modules.append(
-                    Module(
-                        module[1],
-                        module[0],
-                        calc=custom_modules[module[0]],
-                        gm=Gamemodes.BEDWARS.value,
-                    )
-                )
-            else:
-                modules.append(
-                    Module(
-                        module[1],
-                        db_key=module[0],
-                        gm=Gamemodes.BEDWARS.value,
-                    )
-                )
-
-        async with ctx.typing():
-            user = Player(
-                ctx,
-                user if user else ctx.author,
-            )
-
-            await user.wait_for_fully_constructed()
-            im = await self.create_stats_img_new(user, gm=Gamemodes.BEDWARS.value, modules=modules)
-            await self.maybe_send_images(ctx.channel, [im])
-
 
     """Dpy Events"""
     async def cog_before_invoke(self, ctx: commands.Context) -> None:
@@ -921,7 +917,8 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
             raise commands.CheckFailure()
 
         elif not user_key and not await self.config.guild(ctx.guild).apikey():
-            await ctx.send("No personal or guild apikey set!")
+            await ctx.send("No personal or guild apikey set!"
+                           f"Run `{ctx.clean_prefix}help hypixelset apikey in DMs to learn more.`")
             raise commands.CheckFailure()
 
         await self.cog_ready_event.wait()
@@ -938,105 +935,6 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
 
 
     """Image gen"""
-    async def create_stats_img_new(self, player: Player, gm: Gamemode, modules: list):
-        datapath: pathlib.Path = cog_data_path(self)
-        background_path: pathlib.Path = datapath / "backgrounds"
-
-        background = random.choice([file for file in background_path.iterdir() if file.is_file()])
-        im_background = Image.open(background).convert("RGB")
-        im_background = ImageEnhance.Brightness(im_background).enhance(0.3)
-        im_background = im_background.filter(ImageFilter.GaussianBlur(im_background.width / 300))
-
-        font_path = self.fetch_font(datapath, "arial")
-
-        draw = ImageDraw.Draw(im_background, "RGBA")
-
-        # top box
-        font = ImageFont.truetype(str(font_path), size=40)
-        x_top = (im_background.width * 0.02, im_background.width * 0.98)
-        y_top = (im_background.height * 0.02, im_background.height * 0.22)
-
-        draw.rounded_rectangle([(x_top[0], y_top[0]), (x_top[1], y_top[1])], fill=(0, 0, 0, 120), radius=20)
-        draw.text(
-            (x_top[0], (y_top[1] / 2 - y_top[0])),
-            font=font,
-            text=player.name,
-            anchor="lm",
-        )
-
-        # stats box
-        font = ImageFont.truetype(str(font_path), size=20)
-        x = (x_top[0], im_background.width * 0.7)
-        y = (im_background.height * 0.25, im_background.height * 0.92)
-        draw.rounded_rectangle([(x[0], y[0]), (x[1], y[1])], fill=(0, 0, 0, 120), radius=20)
-
-        colors = [(0, 200, 0, 255), (200, 0, 0, 255), (0, 0, 200, 255), (0, 200, 200, 255)]
-
-        start_x = (x[0] + im_background.width / 50)
-        spacing_x = (x[1] - x[0]) / 3
-        pos_x = start_x
-
-        start_y = y[0] + im_background.width / 100
-        spacing_y = (y[1] - y[0]) / int(len(modules) / 3)
-        pos_y = [start_y + spacing_y * x for x in range(int(len(modules) / 3))]
-
-        for idx, module in enumerate(modules):
-            if idx < (len(modules) / 3):
-                color = colors[0] if (idx + 1) % int(len(modules) / 3) else colors[3]
-            elif idx < (len(modules) / 3) * 2:
-                pos_x = start_x + spacing_x
-                color = colors[1] if (idx + 1) % int(len(modules) / 3) else colors[3]
-            elif idx >= (len(modules) / 3) * 2:
-                pos_x = start_x + spacing_x * 2
-                color = colors[2] if (idx + 1) % int(len(modules) / 3) else colors[3]
-
-            val = str(module.get_value(player))
-            draw.text(
-                (pos_x, pos_y[idx % int(len(modules) / 3)]),
-                text=val,
-                font=font,
-                anchor="lt",
-                fill=color,
-            )
-            draw.text(
-                (pos_x + font.getlength(val + " "), pos_y[idx % int(len(modules) / 3)]),
-                text=module.name,
-                font=font,
-                anchor="lt",
-            )
-
-        # skin box
-        x_skin = (im_background.width * 0.72, x_top[1])
-        draw.rounded_rectangle([(x_skin[0], y[0]), (x_skin[1], y[1])], fill=(0, 0, 0, 120), radius=20)
-
-        pos = random.choice([
-            (-25, -25, 20, 5, -2, -20, 2),
-            (-25, 25, 20, 5, -2, 20, -2),
-            (-5, 25, 10, 5, -2, 5, -5),
-            (-5, -25, 10, 5, -2, -5, 5),
-            (0, 0, 0, 0, 0, 0, 0),
-        ])
-        im_skin = await MinePI.render_3d_skin(
-            player.uuid,
-            *pos,
-            12,
-            True,
-            True,
-            False,
-            skin_image=player.skin
-        )
-
-        height = y[1] - y[0] - im_background.height / 25
-        width = im_skin.width * (height / im_skin.height)
-        im_skin = im_skin.resize((int(width), int(height)))
-        im_background = im_background.convert("RGBA")
-
-        x_pos_skin = int((x_skin[0] + (x_skin[1] - x_skin[0]) / 2) - im_skin.width / 2)
-        y_pos_skin = int((y[0] + (y[1] - y[0]) / 2) - im_skin.height / 2)
-        im_background.alpha_composite(im_skin, (x_pos_skin, y_pos_skin))
-
-        return im_background
-
     async def create_stats_img(self, player: Player, gm: Gamemode, compare_stats: list = None) -> Image.Image:
         datapath: pathlib.Path = cog_data_path(self)
         background_path: pathlib.Path = datapath / "backgrounds"
@@ -1108,28 +1006,6 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
 
             y_pos = []
 
-            spacing = stats_box[1] / modules_left
-            if modules_left % 2:
-                for i in range(int(modules_left / 2) + 1):
-                    y_pos.append(stats_box[1] / 2 + spacing * i)
-                    if i:
-                        y_pos.append(stats_box[1] / 2 - spacing * i)
-            else:
-                for i in range(int(modules_left / 2)):
-                    y_pos.append(stats_box[1] / 2 + spacing * 0.5 + spacing * i)
-                    y_pos.append(stats_box[1] / 2 - spacing * 0.5 - spacing * i)
-
-            y_pos = sorted(y_pos)
-
-            longest_item = max([x.name for x in modules], key=len)
-            length = font_header_stats.getlength(longest_item)
-            if length > stats_box[0]:
-                font_size = font_header_stats.size * (stats_box[0] / length)
-                del font_header_stats
-                font_header_stats = ImageFont.truetype(str(font_header_stats_path), int(font_size))
-
-            font_body_stats = ImageFont.truetype(str(font_body_stats_path), int(font_header_stats.size * 0.95))
-
             draw.text(
                 ((im_background.width / 2), im_background.height / 100),
                 player.name,
@@ -1137,56 +1013,80 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
                 font=font_header_player,
                 anchor="mt"
             )
-            anchor = "lm"
-            compare_anchor = "rm"
-            x = int(im_background.width / 25)
-            compare_x = stats_box[0]
-            header_margin = int(font_header_player.size + im_background.height / 100)
-            for i, module in enumerate(modules):
-                try:
-                    y = y_pos[i] + header_margin
-                except IndexError:
-                    y = y_pos[i - modules_left] + header_margin
 
-                if i == modules_left:
-                    anchor = "rm"
-                    compare_anchor = "lm"
-                    # compare_x = (im_background.width - stats_box[0]) + x + im_skin.width / 2
-                    compare_x = stats_box[0] + im_skin.width * 1.5 + x
-                    # print(stats_box[0], im_background.width, im_skin.width, x, compare_x)
-                    # print(im_background.width - im_skin.width)
-                    x = int(im_background.width * 0.96)
+            if modules_left:
+                spacing = stats_box[1] / modules_left
+                if modules_left % 2:
+                    for i in range(int(modules_left / 2) + 1):
+                        y_pos.append(stats_box[1] / 2 + spacing * i)
+                        if i:
+                            y_pos.append(stats_box[1] / 2 - spacing * i)
+                else:
+                    for i in range(int(modules_left / 2)):
+                        y_pos.append(stats_box[1] / 2 + spacing * 0.5 + spacing * i)
+                        y_pos.append(stats_box[1] / 2 - spacing * 0.5 - spacing * i)
 
-                draw.text(
-                    (x, y),
-                    module.name,
-                    fill=color_header_stats,
-                    font=font_header_stats,
-                    anchor=anchor
-                )
+                y_pos = sorted(y_pos)
 
-                draw.text(
-                    (x, y + font_header_stats.size * 0.9),
-                    str(module.get_value(player)),
-                    fill=color_body_stats,
-                    font=font_body_stats,
-                    anchor=anchor
-                )
+                longest_item = max([x.name for x in modules], key=len)
+                length = font_header_stats.getlength(longest_item)
+                if length > stats_box[0]:
+                    font_size = font_header_stats.size * (stats_box[0] / length)
+                    del font_header_stats
+                    font_header_stats = ImageFont.truetype(str(font_header_stats_path), int(font_size))
 
-                if compare_stats:
-                    compare_value, compare_color = self.get_compare_value_and_color(
-                        module,
-                        module.get_value(player),
-                        compare_stats,
+                font_body_stats = ImageFont.truetype(str(font_body_stats_path), int(font_header_stats.size * 0.95))
+
+                anchor = "lm"
+                compare_anchor = "rm"
+                x = int(im_background.width / 25)
+                compare_x = stats_box[0]
+                header_margin = int(font_header_player.size + im_background.height / 100)
+                for i, module in enumerate(modules):
+                    try:
+                        y = y_pos[i] + header_margin
+                    except IndexError:
+                        y = y_pos[i - modules_left] + header_margin
+
+                    if i == modules_left:
+                        anchor = "rm"
+                        compare_anchor = "lm"
+                        # compare_x = (im_background.width - stats_box[0]) + x + im_skin.width / 2
+                        compare_x = stats_box[0] + im_skin.width * 1.5 + x
+                        # print(stats_box[0], im_background.width, im_skin.width, x, compare_x)
+                        # print(im_background.width - im_skin.width)
+                        x = int(im_background.width * 0.96)
+
+                    draw.text(
+                        (x, y),
+                        module.name,
+                        fill=color_header_stats,
+                        font=font_header_stats,
+                        anchor=anchor
                     )
 
                     draw.text(
-                        (compare_x, y + font_header_stats.size * 0.9),
-                        compare_value,
-                        fill=compare_color,
+                        (x, y + font_header_stats.size * 0.9),
+                        str(module.get_value(player)),
+                        fill=color_body_stats,
                         font=font_body_stats,
-                        anchor=compare_anchor
+                        anchor=anchor
                     )
+
+                    if compare_stats:
+                        compare_value, compare_color = self.get_compare_value_and_color(
+                            module,
+                            module.get_value(player),
+                            compare_stats,
+                        )
+
+                        draw.text(
+                            (compare_x, y + font_header_stats.size * 0.9),
+                            compare_value,
+                            fill=compare_color,
+                            font=font_body_stats,
+                            anchor=compare_anchor
+                        )
 
             xp_bar_im = self.render_xp_bar(gm, *player.xp(gm), im_background.size)
             im_background.alpha_composite(xp_bar_im, (0, 0))
