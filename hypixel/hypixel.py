@@ -917,8 +917,8 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
             raise commands.CheckFailure()
 
         elif not user_key and not await self.config.guild(ctx.guild).apikey():
-            await ctx.send("No personal or guild apikey set!"
-                           f"Run `{ctx.clean_prefix}help hypixelset apikey in DMs to learn more.`")
+            await ctx.send("No personal or guild apikey set!\n"
+                           f"Run `{ctx.clean_prefix}help hypixelset apikey` in DMs to learn more.")
             raise commands.CheckFailure()
 
         await self.cog_ready_event.wait()
