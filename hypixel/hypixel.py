@@ -170,6 +170,7 @@ class Player:
         self._resp: Optional[dict] = None
         self._color: Optional[Tuple] = None
         self._rank: Optional[Ranks] = Ranks.DEFAULT
+        self._valid: bool = False
 
         self._apikey: Optional[str] = None
         self._apikey_scope: Optional[Scope] = None
@@ -263,7 +264,7 @@ class Player:
     @property
     def valid(self):
         """Returns True if there is a UUID associated to this object"""
-        return not not self._uuid
+        return self._valid
 
     async def wait_for_fully_constructed(self):
         """Returns true as soon as the object is fully constructed"""
@@ -345,7 +346,7 @@ class Player:
 
     async def initialize(self):
         await self.get_uuid()
-        if not self.valid:
+        if not bool(self._uuid):
             self._player_ready.set()
             return
 
@@ -356,7 +357,13 @@ class Player:
             return
 
         await self.fetch_stats()
+        
+        if not self._resp:
+            self._player_ready.set()
+            return
+        
         await self.fetch_user_data()
+        self._valid = True
         self._player_ready.set()
 
     async def get_uuid(self):
@@ -404,7 +411,7 @@ class Player:
         )
 
         if status == 200 and resp and resp["success"]:
-            self._resp = resp["player"]
+            self._resp = resp["player"] if resp["player"] else {}
 
     async def fetch_user_data(self):
         if isinstance(self._user, discord.Member):
@@ -704,16 +711,16 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
             `[p]hypixelset apikey <your_key>`
             `[p]hypixelset apikey <your_key> 133049272517001216`
         """
-        resp, status = await Player.request_hypixel(ctx=ctx, topic="key", apikey=apikey)
+        resp, status = await Player.request_hypixel(topic="key", apikey=apikey)
 
         if status == 200 and resp:
             if not guild:
                 await self.config.user(ctx.author).apikey.set(apikey)
                 await ctx.tick()
             else:
-                member = guild.get_member(ctx.author)
-                if member:
-                    if member.guild_permissions.manage_guild:
+                member = await self.bot.get_or_fetch_member(guild, ctx.author.id)
+                if member or await self.bot.is_owner(ctx.author):
+                    if await self.bot.is_owner(ctx.author) or member.guild_permissions.manage_guild:
                         await self.config.guild(guild).apikey.set(apikey)
                         await ctx.tick()
                     else:
@@ -1256,8 +1263,11 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
                        f"have a minecraft name set yet. Tell them do to so by running "
                        f"`{ctx.clean_prefix}hypixelset username`.")
             else:
-                msg = (f"Fetching stats for `{users[0]._user_identifier}` failed. Check the given minecraft username "
-                       f"for typos.")
+                msg = (f"Fetching stats for `{users[0]._user_identifier}` failed. ")
+                if users[0]._resp is None:
+                    msg += "Retrieving data from the hypixel api failed."
+                else:
+                    msg += "Looks like this player never joined hypixel."
         else:
             msg = "Fetching stats for the following users failed: \n"
 
@@ -1266,7 +1276,14 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
                 if user._user:
                     failed.append([user._user.name, "No MC name set"])
                 else:
-                    failed.append([user._user_identifier, "Invalid MC name"])
+                    if not user.uuid:
+                        reason = "Invalid MC name"
+                    elif user._resp is None:
+                        reason = "Request failed. API might be down"
+                    else:
+                        reason = "Never joined hypixel"
+
+                    failed.append([user._user_identifier, reason])
 
             msg += f"```md\n{tabulate.tabulate(failed, ['user', 'reason'])}\n```"
 
