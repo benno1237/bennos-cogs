@@ -172,7 +172,7 @@ class Rank:
 class Ranks(enum.Enum):
     DEFAULT = Rank("NORMAL", "", color="#555555")
     VIP = Rank("VIP", "VIP", color="#55FF55")
-    VIP_PLUS = Rank("VIP_PLUS", "VIP+", color="#55FF55", plus_color="#55FFFF")
+    VIP_PLUS = Rank("VIP_PLUS", "VIP+", color="#55FF55", plus_color="#FFAA00")
     MVP = Rank("MVP", "MVP", color="#55FFFF")
     MVP_PLUS = Rank("MVP_PLUS", "MVP+", color="#55FFFF", plus_color="#AA0000")
     SUPERSTAR = Rank("SUPERSTAR", "MVP++", color="#FFAA00", plus_color="#AA0000")

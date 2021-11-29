@@ -905,6 +905,66 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
         if failed:
             await self.send_failed_for(ctx, failed)
 
+    @commands.command(name="tstats")
+    async def command_tstats(self, ctx, user: str = None):
+        active_modules = [
+            ("wins_bedwars", "Wins"),
+            ("kills_bedwars", "Kills"),
+            ("final_kills_bedwars", "Final Kills"),
+            ("beds_broken_bedwars", "Beds Broken"),
+            ("kills_per_game", "Kills/Game"),
+            ("losses_bedwars", "Losses"),
+            ("deaths_bedwars", "Deaths"),
+            ("final_deaths_bedwars", "Final Deaths"),
+            ("beds_lost_bedwars", "Beds Lost"),
+            ("final_kills_per_game", "Finals/Game"),
+            ("win_loose_rate", "WLR"),
+            ("kill_death_rate", "KDR"),
+            ("final_kill_death_rate", "FKDR"),
+            ("beds_destroyed_lost_rate", "BDLR"),
+            ("beds_per_game", "Beds/Game"),
+        ]
+
+        custom_modules = {
+            "kills_per_game": "round({}['kills_bedwars'] / {}['games_played_bedwars'], 2)",
+            "final_kills_per_game": "round({}['final_kills_bedwars'] / {}['games_played_bedwars'], 2)",
+            "win_loose_rate": "round({}['games_played_bedwars'] / {}['wins_bedwars'], 2)",
+            "kill_death_rate": "round({}['kills_bedwars'] / {}['deaths_bedwars'], 2)",
+            "final_kill_death_rate": "round({}['final_kills_bedwars'] / {}['final_deaths_bedwars'], 2)",
+            "beds_destroyed_lost_rate": "round({}['beds_broken_bedwars'] / {}['beds_lost_bedwars'], 2)",
+            "beds_per_game": "round({}['beds_broken_bedwars'] / {}['games_played_bedwars'], 2)",
+        }
+
+        modules = []
+        for module in active_modules:
+            if module[0] in custom_modules.keys():
+                modules.append(
+                    Module(
+                        module[1],
+                        module[0],
+                        calc=custom_modules[module[0]],
+                        gm=Gamemodes.BEDWARS.value,
+                    )
+                )
+            else:
+                modules.append(
+                    Module(
+                        module[1],
+                        db_key=module[0],
+                        gm=Gamemodes.BEDWARS.value,
+                    )
+                )
+
+        async with ctx.typing():
+            user = Player(
+                ctx,
+                user if user else ctx.author,
+            )
+
+            await user.wait_for_fully_constructed()
+            im = await self.create_stats_img_new(user, gm=Gamemodes.BEDWARS.value, modules=modules)
+            await self.maybe_send_images(ctx.channel, [im])
+
 
     """Dpy Events"""
     async def cog_before_invoke(self, ctx: commands.Context) -> None:
@@ -917,8 +977,8 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
             raise commands.CheckFailure()
 
         elif not user_key and not await self.config.guild(ctx.guild).apikey():
-            await ctx.send("No personal or guild apikey set!"
-                           f"Run `{ctx.clean_prefix}help hypixelset apikey in DMs to learn more.`")
+            await ctx.send("No personal or guild apikey set!\n"
+                           f"Run `{ctx.clean_prefix}help hypixelset apikey` in DMs to learn more.")
             raise commands.CheckFailure()
 
         await self.cog_ready_event.wait()
@@ -935,6 +995,139 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
 
 
     """Image gen"""
+    async def create_stats_img_new(self, player: Player, gm: Gamemode, modules: list):
+        datapath: pathlib.Path = cog_data_path(self)
+        background_path: pathlib.Path = datapath / "backgrounds"
+
+        background = random.choice([file for file in background_path.iterdir() if file.is_file()])
+        im_background = Image.open(background).convert("RGB")
+        im_background = ImageEnhance.Brightness(im_background).enhance(0.3)
+        im_background = im_background.filter(ImageFilter.GaussianBlur(im_background.width / 300))
+
+        font_path = self.fetch_font(datapath, "arial")
+
+        draw = ImageDraw.Draw(im_background, "RGBA")
+
+        # top box
+        font = ImageFont.truetype(str(font_path), size=40)
+        x_top = (im_background.width * 0.02, im_background.width * 0.98)
+        y_top = (im_background.height * 0.02, im_background.height * 0.22)
+
+        draw.rounded_rectangle([(x_top[0], y_top[0]), (x_top[1], y_top[1])], fill=(0, 0, 0, 120), radius=20)
+        y_text = y_top[1] / 2 + y_top[0]
+        x_text = x_top[0] + im_background.width * 0.02
+        if player.rank != Ranks.DEFAULT:
+            pattern = re.compile("[+]")
+            text = f"[{pattern.sub('', player.rank.value.clear_name)}"
+            draw.text(
+                (x_text, y_text),
+                font=font,
+                text=text,
+                anchor="lm",
+                fill=player.rank.value.color
+            )
+            x_text += font.getlength(text)
+
+            for _ in range(0, len(pattern.findall(player.rank.value.clear_name))):
+                draw.text(
+                    (x_text, y_text),
+                    font=font,
+                    text="+",
+                    anchor="lm",
+                    fill=player.rank.value.plus_color
+                )
+                x_text += font.getlength("+")
+
+            draw.text(
+                (x_text, y_text),
+                font=font,
+                text=f"]",
+                anchor="lm",
+                fill=player.rank.value.color
+            )
+            x_text += font.getlength("]" + " ")
+
+        draw.text(
+            (x_text, y_text),
+            font=font,
+            text=player.name.upper(),
+            anchor="lm",
+            fill=player.rank.value.color,
+        )
+
+        # stats box
+        font = ImageFont.truetype(str(font_path), size=20)
+        x = (x_top[0], im_background.width * 0.7)
+        y = (im_background.height * 0.25, im_background.height * 0.92)
+        draw.rounded_rectangle([(x[0], y[0]), (x[1], y[1])], fill=(0, 0, 0, 120), radius=20)
+
+        colors = [(0, 200, 0, 255), (200, 0, 0, 255), (0, 0, 200, 255), (0, 200, 200, 255)]
+
+        start_x = (x[0] + im_background.width / 50)
+        spacing_x = (x[1] - x[0]) / 3
+        pos_x = start_x
+
+        start_y = y[0] + im_background.width / 100
+        spacing_y = (y[1] - y[0]) / int(len(modules) / 3)
+        pos_y = [start_y + spacing_y * x for x in range(int(len(modules) / 3))]
+
+        for idx, module in enumerate(modules):
+            if idx < (len(modules) / 3):
+                color = colors[0] if (idx + 1) % int(len(modules) / 3) else colors[3]
+            elif idx < (len(modules) / 3) * 2:
+                pos_x = start_x + spacing_x
+                color = colors[1] if (idx + 1) % int(len(modules) / 3) else colors[3]
+            elif idx >= (len(modules) / 3) * 2:
+                pos_x = start_x + spacing_x * 2
+                color = colors[2] if (idx + 1) % int(len(modules) / 3) else colors[3]
+
+            val = str(module.get_value(player))
+            draw.text(
+                (pos_x, pos_y[idx % int(len(modules) / 3)]),
+                text=val,
+                font=font,
+                anchor="lt",
+                fill=color,
+            )
+            draw.text(
+                (pos_x + font.getlength(val + " "), pos_y[idx % int(len(modules) / 3)]),
+                text=module.name,
+                font=font,
+                anchor="lt",
+            )
+
+        # skin box
+        x_skin = (im_background.width * 0.72, x_top[1])
+        draw.rounded_rectangle([(x_skin[0], y[0]), (x_skin[1], y[1])], fill=(0, 0, 0, 120), radius=20)
+
+        pos = random.choice([
+            (-25, -25, 20, 5, -2, -20, 2),
+            (-25, 25, 20, 5, -2, 20, -2),
+            (-5, 25, 10, 5, -2, 5, -5),
+            (-5, -25, 10, 5, -2, -5, 5),
+            (0, 0, 0, 0, 0, 0, 0),
+        ])
+        im_skin = await MinePI.render_3d_skin(
+            player.uuid,
+            *pos,
+            12,
+            True,
+            True,
+            False,
+            skin_image=player.skin
+        )
+
+        height = y[1] - y[0] - im_background.height / 25
+        width = im_skin.width * (height / im_skin.height)
+        im_skin = im_skin.resize((int(width), int(height)))
+        im_background = im_background.convert("RGBA")
+
+        x_pos_skin = int((x_skin[0] + (x_skin[1] - x_skin[0]) / 2) - im_skin.width / 2)
+        y_pos_skin = int((y[0] + (y[1] - y[0]) / 2) - im_skin.height / 2)
+        im_background.alpha_composite(im_skin, (x_pos_skin, y_pos_skin))
+
+        return im_background
+
     async def create_stats_img(self, player: Player, gm: Gamemode, compare_stats: list = None) -> Image.Image:
         datapath: pathlib.Path = cog_data_path(self)
         background_path: pathlib.Path = datapath / "backgrounds"
