@@ -1088,8 +1088,9 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
                             anchor=compare_anchor
                         )
 
-            xp_bar_im = self.render_xp_bar(gm, *player.xp(gm), im_background.size)
-            im_background.alpha_composite(xp_bar_im, (0, 0))
+            if gm.xp_key:
+                xp_bar_im = self.render_xp_bar(gm, *player.xp(gm), im_background.size)
+                im_background.alpha_composite(xp_bar_im, (0, 0))
 
         await self.bot.loop.run_in_executor(
             None,
