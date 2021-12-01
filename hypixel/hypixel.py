@@ -962,7 +962,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
             ("win_loose_rate", "WLR"),
             ("kill_death_rate", "KDR"),
             ("final_kill_death_rate", "FKDR"),
-            ("beds_destroyed_lost_rate", "BDLR"),
+            ("beds_broken_lost_rate", "BBLR"),
             ("beds_per_game", "Beds/Game"),
         ]
 
@@ -972,7 +972,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
             "win_loose_rate": "round({}['games_played_bedwars'] / {}['wins_bedwars'], 2)",
             "kill_death_rate": "round({}['kills_bedwars'] / {}['deaths_bedwars'], 2)",
             "final_kill_death_rate": "round({}['final_kills_bedwars'] / {}['final_deaths_bedwars'], 2)",
-            "beds_destroyed_lost_rate": "round({}['beds_broken_bedwars'] / {}['beds_lost_bedwars'], 2)",
+            "beds_broken_lost_rate": "round({}['beds_broken_bedwars'] / {}['beds_lost_bedwars'], 2)",
             "beds_per_game": "round({}['beds_broken_bedwars'] / {}['games_played_bedwars'], 2)",
         }
 
@@ -1051,12 +1051,20 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
         datapath: pathlib.Path = cog_data_path(self)
         background_path: pathlib.Path = datapath / "backgrounds"
 
-        background = random.choice([file for file in background_path.iterdir() if file.is_file()])
-        im_background = Image.open(background).convert("RGB")
-        im_background = ImageEnhance.Brightness(im_background).enhance(0.3)
-        im_background = im_background.filter(ImageFilter.GaussianBlur(im_background.width / 300))
+        # take care of the background image
+        def background_im():
+            background = random.choice([file for file in background_path.iterdir() if file.is_file()])
+            im_background = Image.open(background).convert("RGB")
+            im_background = ImageEnhance.Brightness(im_background).enhance(0.3)
+            im_background = im_background.filter(ImageFilter.GaussianBlur(im_background.width / 300))
+            return im_background
 
-        font_path = self.fetch_font(datapath, "arial")
+        im_background = await self.bot.loop.run_in_executor(
+            None,
+            background_im
+        )
+
+        font_path = self.fetch_font(datapath, "MinecraftRegular-Bmg3")
 
         draw = ImageDraw.Draw(im_background, "RGBA")
 
@@ -1113,7 +1121,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
         y = (im_background.height * 0.25, im_background.height * 0.92)
         draw.rounded_rectangle([(x[0], y[0]), (x[1], y[1])], fill=(0, 0, 0, 120), radius=20)
 
-        colors = [(0, 200, 0, 255), (200, 0, 0, 255), (0, 0, 200, 255), (0, 200, 200, 255)]
+        colors = [(0, 200, 0, 255), (200, 0, 0, 255), (255, 150, 200, 255), (0, 200, 200, 255)]
 
         start_x = (x[0] + im_background.width / 50)
         spacing_x = (x[1] - x[0]) / 3
