@@ -9,10 +9,11 @@ import random
 import re
 import time
 import tabulate
+import shutil
 
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageColor
-from typing import Optional, Tuple, Final, Union, List, Any
+from typing import Optional, Tuple, Final, Union, List, Any, Literal
 
 from redbot.core import commands, Config
 from redbot.core.utils import AsyncIter
@@ -33,8 +34,7 @@ class ButtonConfirm(discord.ui.View):
         super().__init__(timeout=30)
 
     def stop(self):
-        for btn in self.children:
-            btn.disabled = True
+        self.clear_items()
         super().stop()
 
     @discord.ui.button(label="Yes", style=discord.ButtonStyle.green)
@@ -170,6 +170,7 @@ class Player:
         self._resp: Optional[dict] = None
         self._color: Optional[Tuple] = None
         self._rank: Optional[Ranks] = Ranks.DEFAULT
+        self._valid: bool = False
 
         self._apikey: Optional[str] = None
         self._apikey_scope: Optional[Scope] = None
@@ -263,7 +264,7 @@ class Player:
     @property
     def valid(self):
         """Returns True if there is a UUID associated to this object"""
-        return not not self._uuid
+        return self._valid
 
     async def wait_for_fully_constructed(self):
         """Returns true as soon as the object is fully constructed"""
@@ -345,7 +346,7 @@ class Player:
 
     async def initialize(self):
         await self.get_uuid()
-        if not self.valid:
+        if not bool(self._uuid):
             self._player_ready.set()
             return
 
@@ -356,7 +357,13 @@ class Player:
             return
 
         await self.fetch_stats()
+
+        if not self._resp:
+            self._player_ready.set()
+            return
+
         await self.fetch_user_data()
+        self._valid = True
         self._player_ready.set()
 
     async def get_uuid(self):
@@ -404,7 +411,7 @@ class Player:
         )
 
         if status == 200 and resp and resp["success"]:
-            self._resp = resp["player"]
+            self._resp = resp["player"] if resp["player"] else {}
 
     async def fetch_user_data(self):
         if isinstance(self._user, discord.Member):
@@ -568,6 +575,21 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
 
     async def initialize(self):
         self.cog_ready_event.clear()
+        data_path = cog_data_path(self)
+
+        for path in bundled_data_path(self).iterdir():
+            path = path.name
+            if not (data_path / path).exists():
+                (data_path / path).mkdir()
+
+            for file in (bundled_data_path(self) / path).iterdir():
+                if file.is_file():
+                    try:
+                        shutil.copy(str(file), str(data_path / path))
+                    except shutil.Error:
+                        pass
+            # shutil.rmtree(str(bundled_data_path(self) / path))
+
         Module.all_modules = await self.fetch_modules()
 
         async for guild in AsyncIter(self.bot.guilds):
@@ -704,7 +726,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
             `[p]hypixelset apikey <your_key>`
             `[p]hypixelset apikey <your_key> 133049272517001216`
         """
-        resp, status = await Player.request_hypixel(ctx=ctx, topic="key", apikey=apikey)
+        resp, status = await Player.request_hypixel(topic="key", apikey=apikey)
 
         if status == 200 and resp:
             if not guild:
@@ -712,8 +734,8 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
                 await ctx.tick()
             else:
                 member = guild.get_member(ctx.author)
-                if member:
-                    if member.guild_permissions.manage_guild:
+                if member or await self.bot.is_owner(ctx.author):
+                    if await self.bot.is_owner(ctx.author) or member.guild_permissions.manage_guild:
                         await self.config.guild(guild).apikey.set(apikey)
                         await ctx.tick()
                     else:
@@ -727,7 +749,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
 
     @commands.guild_only()
     @commands.guildowner_or_permissions(administrator=True, manage_guild=True)
-    @command_hypixelset.group(name="modules")
+    @command_hypixelset.group(name="modules", aliases=["module"])
     async def command_hypixelset_modules(self, ctx: commands.Context) -> None:
         """Base command for managing modules"""
         pass
@@ -771,6 +793,33 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
 
         await ctx.tick()
 
+    @command_hypixelset_modules.command(name="create")
+    async def command_hypixelset_modules_create(self, ctx: commands.Context, gm: Gamemodes, db_key: str, *, calc: str) -> None:
+        """Create a new custom module for the given gamemode"""
+        custom_modules = await self.config.guild(ctx.guild).get_raw(str(gm), "custom_modules")
+        all_modules = Module.all_modules[gm.db_key] + list(custom_modules.keys())
+
+        if db_key in all_modules:
+            await ctx.send("The given db_key seems to be in use already.")
+            return
+
+        for module in Module.all_modules[gm.db_key]:
+            print(module)
+            pattern = re.compile(f"[{module}]")
+            calc = pattern.sub(f"{{}}['{module}']", calc)
+
+        print(calc)
+
+    @command_hypixelset_modules.command(name="list")
+    async def command_hypixelset_modules_list(self, ctx: commands.Context, *, gm: Gamemodes) -> None:
+        """List all modules of a gamemode"""
+        custom_modules = await self.config.guild(ctx.guild).get_raw(str(gm), "custom_modules")
+
+        modules_gamemode = Module.all_modules[gm.db_key] + list(custom_modules.keys())
+        modules_gamemode = "\n".join(list(map(str, modules_gamemode)))
+
+        await ctx.send(file=discord.File(BytesIO(modules_gamemode.encode()), "modules.txt"))
+
     @command_hypixelset_modules.command(name="remove")
     async def command_hypixelset_modules_remove(self, ctx: commands.Context, gm: Gamemodes, db_key: str = None, *, clear_name: str = None) -> None:
         """Remove a module for the given gamemode"""
@@ -801,16 +850,6 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
         view.add_item(SelectionRow(self.modules, ctx.author, self.config, gm))
 
         await ctx.send("Select the modules in your preferred order: ", view=view)
-
-    @command_hypixelset_modules.command(name="list")
-    async def command_hypixelset_modules_list(self, ctx: commands.Context, *, gm: Gamemodes) -> None:
-        """List all modules of a gamemode"""
-        custom_modules = await self.config.guild(ctx.guild).get_raw(str(gm), "custom_modules")
-
-        modules_gamemode = Module.all_modules[gm.db_key] + list(custom_modules.keys())
-        modules_gamemode = "\n".join(list(map(str, modules_gamemode)))
-
-        await ctx.send(file=discord.File(BytesIO(modules_gamemode.encode()), "modules.txt"))
 
     @commands.guild_only()
     @command_hypixelset.command(name="username", aliases=["name"])
@@ -854,16 +893,18 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
 
                 view = ButtonConfirm(ctx.author.id)
 
-                await ctx.send(embed=embed, file=file, view=view)
+                msg = await ctx.send(embed=embed, file=file, view=view)
 
                 await view.wait()
+                await msg.edit(view=None)
                 if view.confirm:
                     await self.config.user(ctx.author).uuid.set(resp["id"])
-                    await ctx.tick()
+                    await ctx.send("Username successfully set!")
                 else:
                     await ctx.send("Cancelled")
             else:
                 await ctx.send("The given username doesn't seem to be valid.")
+
 
     @commands.guild_only()
     @commands.command(name="stats")
@@ -962,8 +1003,11 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
             )
 
             await user.wait_for_fully_constructed()
-            im = await self.create_stats_img_new(user, gm=Gamemodes.BEDWARS.value, modules=modules)
-            await self.maybe_send_images(ctx.channel, [im])
+            if user.valid:
+                im = await self.create_stats_img_new(user, gm=Gamemodes.BEDWARS.value, modules=modules)
+                await self.maybe_send_images(ctx.channel, [im])
+            else:
+                await self.send_failed_for(ctx, [user])
 
 
     """Dpy Events"""
@@ -992,6 +1036,14 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
                 await task.cancel()
 
         await self.session.close()
+
+    async def red_delete_data_for_user(
+        self,
+        *,
+        requester: Literal["discord", "owner", "user", "user_strict"],
+        user_id: int,
+    ):
+        await self.config.user_from_id(user_id).clear()
 
 
     """Image gen"""
@@ -1449,8 +1501,11 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
                        f"have a minecraft name set yet. Tell them do to so by running "
                        f"`{ctx.clean_prefix}hypixelset username`.")
             else:
-                msg = (f"Fetching stats for `{users[0]._user_identifier}` failed. Check the given minecraft username "
-                       f"for typos.")
+                msg = f"Fetching stats for `{users[0]._user_identifier}` failed. "
+                if users[0]._resp is None:
+                    msg += "Retrieving data from the hypixel api failed."
+                else:
+                    msg += "Looks like this player never joined hypixel."
         else:
             msg = "Fetching stats for the following users failed: \n"
 
@@ -1459,9 +1514,16 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
                 if user._user:
                     failed.append([user._user.name, "No MC name set"])
                 else:
-                    failed.append([user._user_identifier, "Invalid MC name"])
+                    if not user.uuid:
+                        reason = "Invalid MC name"
+                    elif user._resp is None:
+                        reason = "Request failed. API might be down"
+                    else:
+                        reason = "Never joined hypixel"
 
-            msg += f"```md\n{tabulate.tabulate(failed, ['user', 'reason'])}\n```"
+                    failed.append([f"{user._user_identifier}:", f"- {reason}"])
+
+            msg += f"```yaml\n{tabulate.tabulate(failed, ['user', 'reason'])}\n```"
 
         await ctx.send(msg)
 

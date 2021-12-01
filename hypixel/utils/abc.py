@@ -5,7 +5,7 @@ import asyncio
 
 from abc import ABC, abstractmethod
 from PIL import Image
-from typing import Optional, Tuple, Union, List, Any
+from typing import Optional, Tuple, Union, List, Any, Literal
 
 from redbot.core import commands, Config
 from redbot.core.bot import Red
@@ -57,15 +57,19 @@ class MixinMeta(ABC):
         raise NotImplementedError()
 
     @abstractmethod
+    async def command_hypixelset_modules_create(self, ctx: commands.Context, gm: Gamemodes, db_key: str, *, calc: str) -> None:
+        raise NotImplementedError()
+
+    @abstractmethod
+    async def command_hypixelset_modules_list(self, ctx: commands.Context, gm: Gamemodes) -> None:
+        raise NotImplementedError()
+
+    @abstractmethod
     async def command_hypixelset_modules_remove(self, ctx: commands.Context, gm: Gamemodes, db_key: str = None, clear_name: str = None) -> None:
         raise NotImplementedError()
 
     @abstractmethod
     async def command_hypixelset_modules_reorder(self, ctx: commands.Context, gm: Gamemodes) -> None:
-        raise NotImplementedError()
-
-    @abstractmethod
-    async def command_hypixelset_modules_list(self, ctx: commands.Context, gm: Gamemodes) -> None:
         raise NotImplementedError()
 
     @abstractmethod
@@ -84,6 +88,15 @@ class MixinMeta(ABC):
 
     @abstractmethod
     def cog_unload(self) -> None:
+        raise NotImplementedError()
+
+    @abstractmethod
+    async def red_delete_data_for_user(
+        self,
+        *,
+        requester: Literal["discord", "owner", "user", "user_strict"],
+        user_id: int,
+    ):
         raise NotImplementedError()
 
 
