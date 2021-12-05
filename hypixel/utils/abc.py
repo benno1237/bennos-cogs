@@ -119,6 +119,10 @@ class MixinMeta(ABC):
         raise NotImplementedError()
 
     @abstractmethod
+    def render_xp_bar_new(self, player) -> Image.Image:
+        raise NotImplementedError()
+
+    @abstractmethod
     def render_xp_bar(self, gm: Gamemode, xp: int, size: tuple) -> Image.Image:
         raise NotImplementedError()
 

@@ -320,6 +320,8 @@ class Player:
                             percentage = level % 1.0
                             return int(level), percentage
 
+            return 0, 0
+
         elif not gm:
             xp = self._resp.get("networkExp", 0)
             fraction, level = math.modf(math.sqrt((2 * xp) + 30625) / 50 - 2.5)
@@ -1076,6 +1078,16 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
         draw.rounded_rectangle([(x_top[0], y_top[0]), (x_top[1], y_top[1])], fill=(0, 0, 0, 120), radius=20)
         y_text = y_top[1] / 2 + y_top[0]
         x_text = x_top[0] + im_background.width * 0.02
+
+        draw.text(
+            (x_text, y_text),
+            text=f"[{player.xp()[0]}✫]",
+            font=font,
+            anchor="lm",
+            fill="#55FFFF"
+        )
+        x_text += font.getlength(f"[{player.xp()[0]}✫] ")
+
         if player.rank != Ranks.DEFAULT:
             pattern = re.compile("[+]")
             text = f"[{pattern.sub('', player.rank.value.clear_name)}"
@@ -1394,6 +1406,9 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
                 if (module.db_key if not module.is_custom else module.name) in i:
                     return str(compare), red
             return str(compare), green
+
+    def render_xp_bar_new(self, player) -> Image.Image:
+        pass
 
     def render_xp_bar(self, gm: Gamemode, level: int, percentage: float, size: tuple):
         im = Image.new("RGBA", size)
