@@ -102,6 +102,10 @@ class MixinMeta(ABC):
 
     """Image gen"""
     @abstractmethod
+    async def create_stats_img_new(self, player: Any, gm: Gamemode, modules: list) -> Image.Image:
+        raise NotImplementedError()
+
+    @abstractmethod
     async def create_stats_img(self, player: Any, gm: Gamemode, compare_stats: list = None) -> Image.Image:
         raise NotImplementedError()
 
@@ -119,11 +123,11 @@ class MixinMeta(ABC):
         raise NotImplementedError()
 
     @abstractmethod
-    def render_xp_bar_new(self, player) -> Image.Image:
+    def render_xp_bar_new(self, player, width: int) -> Image.Image:
         raise NotImplementedError()
 
     @abstractmethod
-    def render_xp_bar(self, gm: Gamemode, xp: int, size: tuple) -> Image.Image:
+    def render_xp_bar(self, gm: Gamemode, player, size: tuple) -> Image.Image:
         raise NotImplementedError()
 
 

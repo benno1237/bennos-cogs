@@ -12,19 +12,20 @@ import tabulate
 import shutil
 
 from io import BytesIO
-from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageColor
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 from typing import Optional, Tuple, Final, Union, List, Any, Literal
 
 from redbot.core import commands, Config
 from redbot.core.utils import AsyncIter
 from redbot.core.data_manager import cog_data_path, bundled_data_path
-from redbot.core.utils.chat_formatting import box
 
 from .utils.abc import CompositeMetaClass, MixinMeta
 from .utils.enums import Gamemode, Gamemodes, Scope, ColorTypes, Ranks, Rank
 
 INVALID_API_KEY: Final = "Invalid API key"
-USER_AGENT: Final = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/93.0.4577.82 Safari/537.36"
+USER_AGENT: Final = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " \
+                    "AppleWebKit/537.36 (KHTML, like Gecko) " \
+                    "Chrome/93.0.4577.82 Safari/537.36"
 
 
 class ButtonConfirm(discord.ui.View):
@@ -112,11 +113,11 @@ class Module:
         self._db_key: Optional[str] = db_key
         self._calc: Optional[str] = calc
         self._gamemode: Optional[Gamemode] = gm
-    
+
     @property
     def name(self):
         return self._name
-    
+
     @property
     def db_key(self):
         return self._db_key
@@ -124,7 +125,7 @@ class Module:
     @property
     def is_custom(self):
         return bool(self._calc)
-    
+
     @property
     def calculation(self):
         return self._calc
@@ -270,7 +271,7 @@ class Player:
         """Returns true as soon as the object is fully constructed"""
         await self._player_ready.wait()
 
-    def xp(self, gm: Gamemode = None) -> Tuple[int, float]:
+    def xp(self, gm: Gamemode = None) -> Tuple[int, float, int]:
         """Returns the player's network XP for the given gamemode"""
         if gm and gm.xp_key:
             xp = self.stats(gm).get(gm.xp_key, 0)
@@ -302,7 +303,7 @@ class Player:
                 else:
                     cost = level_cost
 
-                return levels, xp / cost
+                return levels, xp / cost, cost
 
             elif gm == Gamemodes.SKYWARS.value:
                 xps = [0, 20, 70, 150, 250, 500, 1000, 2000, 3500, 5000, 10000, 15000]
@@ -312,22 +313,22 @@ class Player:
                 if xp >= 15000:
                     level = (xp - 15000) / 10000 + 12
                     percentage = level % 1.0
-                    return int(level), percentage
+                    return int(level), percentage, 15000
                 else:
                     for i in range(len(xps)):
                         if xp < xps[i]:
                             level = i + float(xp - xps[i - 1]) / (xps[i] - xps[i - 1])
                             percentage = level % 1.0
-                            return int(level), percentage
+                            return int(level), percentage, xps[i]
 
-            return 0, 0
+            return 0, 0, 0
 
         elif not gm:
             xp = self._resp.get("networkExp", 0)
             fraction, level = math.modf(math.sqrt((2 * xp) + 30625) / 50 - 2.5)
-            return int(level), fraction
+            return int(level), fraction, 0
         else:
-            return 0, 0
+            return 0, 0, 0
 
     def filtered_stats(self, gm: Gamemode, modules: list):
         if not self._resp:
@@ -539,7 +540,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
 
         gamemode_data = {}
         for gm in Gamemodes:
-            if gm == Gamemodes.BEDWARS: # default modules for bedwars
+            if gm == Gamemodes.BEDWARS:  # default modules for bedwars
                 gamemode_data[str(gm.value)] = {
                     "current_modules": [
                         ("games_played_bedwars", "Games played"),
@@ -1066,7 +1067,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
             background_im
         )
 
-        font_path = self.fetch_font(datapath, "MinecraftRegular-Bmg3")
+        font_path = self.fetch_font(datapath, "Minecraft-Regular")
 
         draw = ImageDraw.Draw(im_background, "RGBA")
 
@@ -1140,7 +1141,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
         pos_x = start_x
 
         start_y = y[0] + im_background.width / 100
-        spacing_y = (y[1] - y[0]) / int(len(modules) / 3)
+        spacing_y = (y[1] - y[0] - im_background.width / 20) / int(len(modules) / 3)
         pos_y = [start_y + spacing_y * x for x in range(int(len(modules) / 3))]
 
         for idx, module in enumerate(modules):
@@ -1192,11 +1193,16 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
         height = y[1] - y[0] - im_background.height / 25
         width = im_skin.width * (height / im_skin.height)
         im_skin = im_skin.resize((int(width), int(height)))
-        im_background = im_background.convert("RGBA")
 
         x_pos_skin = int((x_skin[0] + (x_skin[1] - x_skin[0]) / 2) - im_skin.width / 2)
         y_pos_skin = int((y[0] + (y[1] - y[0]) / 2) - im_skin.height / 2)
+        im_background = im_background.convert("RGBA")
         im_background.alpha_composite(im_skin, (x_pos_skin, y_pos_skin))
+
+        im_xp = self.render_xp_bar_new(player, int(x[1] - x[0]))
+        im_background.alpha_composite(
+            im_xp, (int(x[0] + im_background.width / 50), int(y[1] - im_xp.height - im_background.height / 100))
+        )
 
         return im_background
 
@@ -1354,7 +1360,7 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
                         )
 
             if gm.xp_key:
-                xp_bar_im = self.render_xp_bar(gm, *player.xp(gm), im_background.size)
+                xp_bar_im = self.render_xp_bar(gm, player, im_background.size)
                 im_background.alpha_composite(xp_bar_im, (0, 0))
 
         await self.bot.loop.run_in_executor(
@@ -1407,10 +1413,79 @@ class Hypixel(commands.Cog, MixinMeta, metaclass=CompositeMetaClass):
                     return str(compare), red
             return str(compare), green
 
-    def render_xp_bar_new(self, player) -> Image.Image:
-        pass
+    def render_xp_bar_new(self, player, width) -> Image.Image:
+        im = Image.new("RGBA", (width, 30))
+        draw = ImageDraw.Draw(im)
 
-    def render_xp_bar(self, gm: Gamemode, level: int, percentage: float, size: tuple):
+        bar_color = "#AAAAAA"
+        line_color = "#55FFFF"
+
+        const = 15
+        y = 10
+
+        level, xp, xp_for_next_level = player.xp(Gamemodes.BEDWARS.value)
+        xp = int(round(xp * xp_for_next_level, 0))
+
+        font_path = self.fetch_font(cog_data_path(self), "Minecraft-Regular")
+        xp_font = ImageFont.truetype(str(font_path), size=const * 2)
+
+        spacing = const
+        text = f"[{level}✫] "
+        draw.text(
+            (spacing, y + 1),
+            text=text,
+            font=xp_font,
+            anchor="lm",
+            fill=line_color,
+        )
+        spacing += xp_font.getlength(text)
+
+        draw.text(
+            (spacing + const, y + 1),
+            text="[",
+            font=xp_font,
+            anchor="rm",
+        )
+        spacing += xp_font.getlength("[") + int(const * 0.5)
+
+        for i in range(1, 11):
+            color = line_color if xp * (0.002 / i) >= 1 else bar_color
+            draw.line(
+                ((spacing, y), (spacing + const, y)),
+                fill=color,
+                width=const,
+            )
+            spacing += int(const * 1.5)
+
+        draw.text(
+            (spacing, y + 1),
+            text="]",
+            font=xp_font,
+            anchor="lm",
+        )
+        spacing += xp_font.getlength("]")
+
+        text = f" [{level + 1}✫]"
+        draw.text(
+            (spacing, y + 1),
+            text=text,
+            font=xp_font,
+            anchor="lm",
+            fill=line_color,
+        )
+        spacing += xp_font.getlength(text)
+
+        # draw.text(
+        #     (spacing + int(const * 11 * 2), y + 1),
+        #     text=f"[{xp} / {xp_for_next_level}]",
+        #     font=xp_font,
+        #     anchor="lm"
+        # )
+
+        return im
+
+    def render_xp_bar(self, gm: Gamemode, player, size: tuple):
+        level, percentage, _ = player.xp(gm)
         im = Image.new("RGBA", size)
         draw = ImageDraw.Draw(im)
 
