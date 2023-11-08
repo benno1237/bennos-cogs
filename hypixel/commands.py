@@ -1,6 +1,6 @@
 
 
-class Commands
+class Commands:
     @commands.guild_only()
     @commands.group(name="autostats", invoke_without_command=True)
     async def command_autostats(self, ctx: commands.Context, gm: Gamemodes, *usernames: str) -> None:
