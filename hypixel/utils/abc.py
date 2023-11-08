@@ -49,6 +49,30 @@ class MixinMeta(ABC):
         raise NotImplementedError()
 
     @abstractmethod
+    async def command_hypixelset_autostats(self, ctx: commands.Context) -> None:
+        raise NotImplementedError()
+
+    @abstractmethod
+    async def command_hypixelset_autostats_channel(self, ctx: commands.Context, channel: discord.VoiceChannel) -> None:
+        raise NotImplementedError()
+
+    @abstractmethod
+    async def command_hypixelset_autostats_info(self, ctx: commands.Context) -> None:
+        raise NotImplementedError()
+
+    @abstractmethod
+    async def command_hypixelset_autostats_voicechannel(self, ctx: commands.Context, channel: discord.VoiceChannel = None) -> None:
+        raise NotImplementedError()
+
+    @abstractmethod
+    async def command_hypixelset_defaultbackgrounds(self, ctx: commands.Context) -> None:
+        raise NotImplementedError()
+
+    @abstractmethod
+    async def command_hypixelset_defaultfonts(self, ctx: commands.Context) -> None:
+        raise NotImplementedError()
+
+    @abstractmethod
     async def command_hypixelset_modules(self, ctx: commands.Context) -> None:
         raise NotImplementedError()
 
@@ -78,6 +102,12 @@ class MixinMeta(ABC):
 
     @abstractmethod
     async def command_stats(self, ctx: commands.Context, gm: Gamemodes, *usernames: str) -> None:
+        raise NotImplementedError()
+
+
+    """Listeners"""
+    @abstractmethod
+    async def on_voice_state_update(self, member, before, after) -> None:
         raise NotImplementedError()
 
 
@@ -134,6 +164,10 @@ class MixinMeta(ABC):
     """Utils"""
     @abstractmethod
     async def fetch_modules(self) -> None:
+        raise NotImplementedError()
+
+    @abstractmethod
+    async def get_or_fetch_channel(self, channel_id: int) -> Union[discord.VoiceChannel, discord.TextChannel]:
         raise NotImplementedError()
 
     @abstractmethod
